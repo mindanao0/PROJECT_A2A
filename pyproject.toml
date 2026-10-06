@@ -1,16 +1,20 @@
-[project]
-name = "navis"
-version = "0.1.0"
-description = "Run several coding agents on separate, sandboxed tasks"
-requires-python = ">=3.11"
-dependencies = []
-
-[project.scripts]
-navis = "navis.cli:main"
-
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["navis"]
+[project]
+name = "navis-control"
+version = "0.2.0"
+description = "Navis: run several coding agents on separate, sandboxed tasks, with a local control GUI"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+navis = "navis.__main__:main"      # GUI (simulation by default, --real for the runtime)
+navis-cli = "navis.cli:main"       # queue and inspect tasks from a terminal
+
+[tool.setuptools.package-data]
+navis = ["web/*.html", "web/*.css", "web/*.js"]
+
+[tool.setuptools.packages.find]
+include = ["navis*"]
