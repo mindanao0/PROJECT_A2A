@@ -31,8 +31,9 @@ Tools Phase 1 แทน message types 14 แบบ:
 | `report_result(status, summary)` | status = done / blocked / failed; Runtime ทำ snapshot commit เองแล้วส่งเข้า VERIFY |
 | `ask_user(question)` | task → WAITING_INPUT |
 | `run_check(name)` | รันเฉพาะ check ที่ตั้งไว้ใน project config (§9) คืน exit code กับท้าย output; output เต็มเก็บเป็น artifact |
+| `delegate(title, spec, scope)` | (Phase 2) queue งานต่อที่เริ่มหลัง attempt นี้จบจากผลของมัน: scope ต้องอยู่ใน scope ตัวเอง, ลึก 1 ชั้น, ไม่เกิน `max_delegations`; review task ใช้ไม่ได้ |
 
-Phase 2 เพิ่ม `delegate(title, spec, scope)` และ `request_review()` ส่วน message types อื่นเป็น event type ใน log ไม่ใช่สิ่งที่ agent ต้องรู้
+Phase 2 เพิ่ม `delegate(title, spec, scope)` ส่วนการขอ review เป็นคำสั่งของผู้ใช้/policy ไม่ใช่ tool ของ agent (implementer ไม่เลือก reviewer ของตัวเอง) message types อื่นเป็น event type ใน log ไม่ใช่สิ่งที่ agent ต้องรู้
 
 - Identity: Runtime สร้าง Unix socket แยกต่อ attempt และ bind เข้า sandbox ของ attempt นั้นเท่านั้น สิ่งที่ต่อเข้ามาทาง socket นี้คือ attempt นั้น ไม่เชื่อชื่อที่ model เขียน
 - Attempt จบหรือถูก reassign → ปิด socket; late result ส่งเข้ามาไม่ได้

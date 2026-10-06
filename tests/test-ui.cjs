@@ -90,6 +90,17 @@ assert(!strip.includes('<b>')&&!strip.includes('<i>')&&!strip.includes('<u>'),'S
 assert(strip.includes('abcdef0123')&&strip.includes('lint ✗')&&strip.includes('&lt;u&gt;unit&lt;/u&gt; ✓'),'Commit and per-check results must be shown');
 assert(strip.includes('uncommitted changes'),'Reason must be visible when promote is not possible');
 assert(strip.includes('checking the merged commit for task 7'));
+assert((strip.match(/data-discard=/g)||[]).length===3,'Every integration offers a discard');
+assert(!strip.includes('data-review-integration'),'No review button unless the runtime says a review is needed');
+vm.runInContext(`snapshot={mode:'real',capabilities:{handoff:{claude_review:false}},integration:[{project_id:'p',branch:'main',commit:'abcdef0123456789',tasks:[1,2],checks:[],can_promote:false,review_needed:true,reason:'needs a review',busy:null}]};`,context);
+const needs = context.strip();
+assert(/<button[^>]*data-review-integration[^>]*disabled/.test(needs),'Review needs a logged-in Claude');
+vm.runInContext(`snapshot.capabilities.handoff.claude_review=true;`,context);
+assert(!/<button[^>]*data-review-integration[^>]*disabled/.test(context.strip()),'Review is offered once Claude is logged in');
+vm.runInContext(`snapshot={mode:'real',integration:[
+  {project_id:'<b>p</b>',branch:'<i>main</i>',commit:'abcdef0123456789',tasks:[1,2],checks:[{name:'<u>unit</u>',rc:0},{name:'lint',rc:1}],can_promote:true,busy:null},
+  {project_id:'q',branch:'main',commit:'1234567890abcdef',tasks:[3],checks:[],can_promote:false,reason:'your working tree has uncommitted changes',busy:null},
+  {project_id:'r',branch:'main',commit:null,tasks:[],checks:[],can_promote:false,busy:'7'}]};`,context);
 const buttons = strip.match(/<button[^>]*data-promote[^>]*>/g);
 assert.equal(buttons.length,3);
 assert(!buttons[0].includes('disabled'),'Ready integration must be promotable');

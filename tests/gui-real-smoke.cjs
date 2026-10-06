@@ -38,6 +38,16 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     const strip = page.locator('.integration-strip');
     await strip.getByText('ok ✓').waitFor({timeout: 60000});
     assert.equal(git('rev-parse', 'HEAD').trim(), before, 'Integrating must not touch the user branch');
+    // Roll back, then integrate again: the branch is only a proposal until the user fast-forwards.
+    await strip.getByRole('button', {name: 'Discard', exact: true}).click();
+    await page.locator('#confirm-dialog').getByRole('button', {name: 'Confirm discard', exact: true}).click();
+    await page.locator('.integration-strip').waitFor({state: 'detached', timeout: 15000});
+    let gone = false; try { git('rev-parse', '--verify', '-q', 'refs/navis/integration/demo'); } catch (_) { gone = true; }
+    assert(gone, 'Discard must remove the integration ref');
+    await page.locator('[data-task]').first().click();
+    await page.getByRole('button', {name: 'Add to integration branch', exact: true}).click();
+    await page.locator('#detail-dialog').getByRole('button', {name: 'Close task details', exact: true}).click();
+    await page.locator('.integration-strip').getByText('ok ✓').waitFor({timeout: 60000});
     const promote = strip.getByRole('button', {name: /Fast-forward main/});
     await promote.waitFor(); assert(await promote.isEnabled());
     await promote.click();
@@ -47,7 +57,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.equal(git('show', 'HEAD:src/x.py'), 'x = 1\n');
     assert.equal(git('status', '--porcelain').trim(), '');
     assert.equal(errors.length, 0, errors.join('\n'));
-    console.log('Real-runtime browser checks passed: create, integrate, fast-forward.');
+    console.log('Real-runtime browser checks passed: create, integrate, discard, integrate again, fast-forward.');
   } finally {
     if (browser) await browser.close();
     server.kill('SIGINT');

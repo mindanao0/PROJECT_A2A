@@ -91,6 +91,9 @@ def _integrate(rt, tid):
                 raise IntegrationError(f"your branch and the integration branch conflict in: {', '.join(conflicts)}")
         if ancestor(path, t["head"], tip):
             raise IntegrationError("this result is already in the integration branch")
+        dep = t["after"] is not None and s.one("select head from tasks where id = ?", t["after"])
+        if dep and dep["head"] and not ancestor(path, dep["head"], tip):
+            raise IntegrationError(f"this task builds on task {t['after']}; integrate that first")
         if ancestor(path, tip, t["head"]):
             new = t["head"]
         else:
@@ -119,11 +122,12 @@ def evidence(store, project, commit):
 
 def status(store, project):
     """What a promote would do now, for the CLI and the GUI."""
-    path = runtime.load_project(project)["path"]
+    proj = runtime.load_project(project)
+    path = proj["path"]
     ref, head = REF.format(project), git(path, "rev-parse", "HEAD")[1]
     tip = git(path, "rev-parse", "--verify", "-q", ref)[1]
     out = {"project": project, "commit": tip or None, "head": head, "branch": git(path, "symbolic-ref", "-q", "--short", "HEAD")[1],
-           "tasks": [], "checks": [], "can_promote": False, "reason": ""}
+           "tasks": [], "checks": [], "can_promote": False, "reason": "", "review_needed": False}
     if not tip or ancestor(path, tip, head):
         return out | {"reason": "nothing to promote"}
     seen = []
@@ -138,6 +142,8 @@ def status(store, project):
         out["reason"] = "your branch moved; integrate a task again to bring it in"
     elif not ev:
         out["reason"] = "no passing checks recorded for this exact commit"
+    elif proj["require_review"] and not runtime.commit_approved(store, tip):
+        out |= {"reason": "this project requires an approving review of this exact integration commit", "review_needed": True}
     elif not out["branch"]:
         out["reason"] = "HEAD is detached; check out a branch first"
     elif git(path, "status", "--porcelain", "--untracked-files=no")[1]:
@@ -162,3 +168,20 @@ def promote(store, project, expected=None):
         raise IntegrationError(f"fast-forward failed: {err}")
     store.log(None, None, "promote", project=project, commit=st["commit"], branch=st["branch"])
     return st["commit"]
+
+
+def discard(store, project, expected=None):
+    """Roll back: drop the integration branch. Tasks stay COMPLETED and can be integrated again."""
+    path = runtime.load_project(project)["path"]
+    ref = REF.format(project)
+    with LOCKS[project]:
+        tip = git(path, "rev-parse", "--verify", "-q", ref)[1]
+        if not tip:
+            raise IntegrationError("there is no integration branch")
+        if expected and expected != tip:
+            raise IntegrationError("the integration branch changed; refresh and look again")
+        rc, _, err = git(path, "update-ref", "-d", ref, tip)
+        if rc:
+            raise IntegrationError(f"could not discard: {err}")
+    store.log(None, None, "integration-discarded", project=project, commit=tip)
+    return tip
