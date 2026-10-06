@@ -1,8 +1,8 @@
-# PROJECT_A2A
+# Navis
 
 ระบบกลางสำหรับให้ AI หลายตัวทำงานเป็นทีมในหลายโปรเจกต์ โดยมีเป้าหมายหลักคือให้ ChatGPT/Codex, Claude Code และ Local LLM สามารถคุย วิเคราะห์ แบ่งงาน ตรวจงาน และส่งผลลัพธ์หากันได้โดยไม่ต้องใช้ไฟล์ handoff เป็นช่องทางหลัก
 
-> สถานะ: **Design / Discussion Draft** — ยืนยันขอบเขต MVP แล้ว 5 ข้อ แต่ implementation ยังไม่ล็อกและยังไม่มีผล feasibility tests
+> สถานะ: **Design / Discussion Draft** — ยืนยันคำตัดสินแล้ว 13 ข้อ (Python, สร้างกับ `fake-agent` ก่อนใช้ CLI จริง); implementation ยังไม่ล็อก; boundary probes ที่ไม่ใช้ quota ผ่านแล้ว (`probes/boundary.sh`) แต่ adapter probes ยังไม่ได้ทดสอบ
 
 ## ขอบเขต MVP ที่ยืนยันแล้ว
 
@@ -11,8 +11,10 @@
 - Coding agent อ่าน–แก้โค้ด–รันทดสอบได้ภายใน assigned workspace ตามสิทธิ์ที่บังคับใช้จริง
 - Local LLM เริ่มจากสรุป context และวิเคราะห์ log; เพิ่ม coding หลัง Agent Runner ผ่านการทดสอบและอนุญาตบทบาทนั้น
 - UI บนเครื่องเดียวก่อน โดยเตรียม authentication/authorization boundary สำหรับ remote; ยังไม่เปิด remote listener
+- ผู้ใช้คนเดียว, project แรกคือ PROJECT_VELA, ใช้ subscription แผน 20 USD
+- เป้าหมายหลัก: แบ่งงานชัด ไม่ทับกัน ไม่ทำซ้ำ และแบ่งทรัพยากรเครื่อง
 
-ดู [Confirmed Decisions](docs/DECISIONS.md) และ [MVP Contract](docs/MVP_CONTRACT.md) สำหรับขอบเขตและข้อเสนอเกณฑ์ผ่าน
+ดู [Confirmed Decisions](docs/DECISIONS.md), [MVP Contract](docs/MVP_CONTRACT.md) และ [Execution Design](docs/EXECUTION_DESIGN.md) สำหรับขอบเขต เกณฑ์ผ่าน และการออกแบบที่ implement ได้
 
 ## เป้าหมาย
 
@@ -69,6 +71,7 @@
 
 - [Confirmed Decisions](docs/DECISIONS.md)
 - [MVP Contract / Acceptance Criteria](docs/MVP_CONTRACT.md)
+- [Execution Design](docs/EXECUTION_DESIGN.md)
 - [Architecture Draft](docs/ARCHITECTURE_DRAFT.md)
 - [Open Decisions](docs/OPEN_DECISIONS.md)
 - [Initial Roadmap](docs/ROADMAP.md)

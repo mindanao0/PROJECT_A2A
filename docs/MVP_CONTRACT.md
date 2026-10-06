@@ -22,7 +22,7 @@
 | ส่งข้อความขณะกำลังรัน | Not tested | Not tested | Not tested |
 | Interrupt turn / terminate process tree | Not tested | Not tested | Not tested |
 | Resume session หลัง interrupt/restart | Not tested | Not tested | Not tested |
-| Approval hook และ execution boundary | Not tested | Not tested | ไม่มี write/exec tools ตามขอบเขต MVP |
+| Approval hook และ execution boundary | Partial: `codex sandbox -P :workspace` (0.160.1) บล็อกการเขียนนอก workspace และเน็ต แต่คำสั่งอ่าน auth ของตัวเองได้; `codex exec` ยังไม่ทดสอบ | Not tested | ไม่มี write/exec tools ตามขอบเขต MVP |
 | Usage/rate-limit visibility | Not tested | Not tested | Not tested |
 
 สำหรับแต่ละช่อง บันทึก interface, backend/model version, test command, expected/observed result, evidence reference, limitation และวันที่
@@ -33,7 +33,11 @@
 
 ## 3. Execution boundaries
 
-- Worktree แยกไฟล์งาน; ไม่ใช่ process sandbox และยังมี Git metadata ที่แชร์
+การออกแบบที่ implement ได้และผล probe อยู่ใน [Execution Design](EXECUTION_DESIGN.md)
+
+- ใช้ clone ต่อ attempt แทน worktree เพราะ worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout หลัก
+- Process ของ agent CLI ออกเน็ตไป provider ได้ แต่คำสั่งที่ agent รันต้องไม่มีเน็ต
+- ทุก sandbox ซ่อน host sockets (`/run`): read-only mount ไม่กัน `connect()` ไป docker/dbus socket
 - ระบุ enforcement ของ filesystem, network, process tree และ credential exposure ให้ตรวจสอบได้
 - Prompt, trust label หรือ cwd อย่างเดียวไม่ถือว่าเป็นการจำกัดสิทธิ์
 - Backend ที่บังคับขอบเขตที่ต้องการไม่ได้ ต้องปฏิเสธโหมดเขียนและแจ้ง limitation; ห้ามเปลี่ยนเป็น unrestricted execution เงียบ ๆ
@@ -54,7 +58,8 @@ Retry/reassign สร้าง attempt ใหม่ และเก็บหล�
 
 ```text
 NEW -> QUEUED -> ASSIGNED -> RUNNING -> REVIEW -> VERIFY -> COMPLETED
-RUNNING -> WAITING_INPUT | WAITING_APPROVAL | BLOCKED | FAILED | CANCELLING
+RUNNING -> WAITING_INPUT | WAITING_APPROVAL | WAITING_QUOTA | BLOCKED | FAILED | CANCELLING
+WAITING_QUOTA -> QUEUED (after provider cooldown; does not count as retry)
 CANCELLING -> CANCELLED
 FAILED -> QUEUED (new attempt, only after retry checks)
 VERIFY -> RUNNING (new attempt for fixes) | FAILED
@@ -132,7 +137,12 @@ Cancel task ต้อง propagate ไป dependent/child work ตาม policy 
 | Stale context/result | เปลี่ยน commit/instruction แล้ว invalidate context/evidence และปฏิเสธ late result |
 | UI disconnect | Runtime ทำงานตาม policy ต่อ และ UI reconnect เห็นสถานะที่ถูกต้อง |
 | Local/remote boundary | local unauthorized client ถูกปฏิเสธ; remote listener ยังไม่เปิด |
+| Host socket escape | จาก attempt sandbox เข้าถึง docker socket, user dbus และ control socket ของ Runtime ไม่ได้ |
+| Credential leak | token ของ agent ที่ปรากฏใน diff/artifact/message ถูก block ก่อนส่งต่อ |
+| Quota limit | rate limit → WAITING_QUOTA ไม่เผา retry และกลับมาทำต่อหลัง cooldown |
+| Scope overlap / duplicate | task ที่ scope ทับกันไม่รันพร้อมกัน; task key ซ้ำไม่สร้างงานใหม่ |
 
+ทุก scenario รันกับ `fake-agent` ก่อน แล้วจึงรัน contract probes สั้น ๆ กับ CLI จริง
 Phase 0 ต้องให้ evidence ของ adapter ก่อนกล่าวว่า supported
 Phase 1 ต้องผ่าน single-agent/boundary/control/recovery/UI cases ที่เกี่ยวข้องก่อนเพิ่ม collaboration
 Local coding ต้องมี Agent Runner ที่ผ่าน tool permissions, invalid-tool-call handling, loop limits, cancellation, recovery และ workspace tests ก่อนเปิดบทบาทนั้น

@@ -2,18 +2,11 @@
 
 เอกสารนี้เก็บสิ่งที่ **ยังไม่ได้ตัดสินใจ** และสถานะคำตัดสินที่เกี่ยวข้อง รายการที่ยืนยันแล้วอ้าง [Confirmed Decisions](DECISIONS.md); ข้อเสนอ acceptance อยู่ใน [MVP Contract](MVP_CONTRACT.md)
 
-Confirmed scope ไม่ได้ล็อกภาษา framework transport storage หรือ sandbox implementation
+Confirmed scope ไม่ได้ล็อก framework transport storage หรือ sandbox implementation
 
-## OD-001 Core implementation language
+## OD-001 Core implementation language — RESOLVED
 
-ตัวเลือกเบื้องต้น:
-- Rust
-- Go
-- TypeScript/Node
-- Python
-- Hybrid
-
-ต้องพิจารณา daemon/process supervision, WebSocket, PTY, plugin adapters, packaging และ cross-platform support
+D-012: Python ≥ 3.11 ใช้ stdlib ก่อน
 
 ## OD-002 UI technology — PARTIALLY RESOLVED
 
@@ -62,13 +55,10 @@ Internal protocol จะ:
 - approval/tool hooks
 - usage visibility
 
-## OD-007 Worktree strategy
+## OD-007 Worktree strategy — PROPOSED
 
-- worktree ต่อ task
-- worktree ต่อ agent
-- adaptive
-
-ต้องวัด overhead และ conflict behavior
+ข้อเสนอ: clone ต่อ attempt (`git clone --shared`) แทน worktree เพราะ worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout หลัก; ผล probe อยู่ใน [Execution Design](EXECUTION_DESIGN.md) §4
+ยังต้องวัด overhead กับ VELA จริง (checkout ประมาณ 482 MB ต่อ clone)
 
 ## OD-008 Who can merge — OPEN
 
@@ -92,15 +82,10 @@ Default ช่วงแรกควร conservative
 
 ไม่ควรเริ่มด้วยระบบ memory ซับซ้อนเกินจำเป็น
 
-## OD-010 Project configuration format
+## OD-010 Project configuration format — PROPOSED
 
-ตัวอย่าง:
-
-```text
-.a2a/project.yaml
-```
-
-ต้องกำหนดว่าอะไรเป็น global config และอะไร commit ลง repo
+ข้อเสนอ: TOML นอก repo ที่ `~/.config/navis/projects/<project>.toml` (ตัวอย่างใน [Execution Design](EXECUTION_DESIGN.md) §9) เพื่อไม่เพิ่มไฟล์ใน repo ของ project (D-007)
+ยังต้องตัดสินว่ามีส่วนไหนควร commit ลง repo หรือไม่
 
 ## OD-011 Agent identity and roles
 
@@ -188,3 +173,7 @@ D-004: เริ่มจากสรุป context และวิเครา�
 
 กำหนด state transition guards, event schema, action reconciliation, approval binding, Pause/Stop/Kill semantics และ immutable verification evidence
 ข้อเสนอ baseline อยู่ใน MVP Contract; ต้องพิสูจน์กับ adapter จริงก่อนล็อก implementation
+
+## OD-024 Project name — RESOLVED
+
+D-011: Navis — ชื่อเดิม "A2A" ชนกับ Agent2Agent (A2A) protocol ซึ่ง OD-005 อาจทำ bridge ไปหาในอนาคต
