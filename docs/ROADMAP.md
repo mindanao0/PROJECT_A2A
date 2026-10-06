@@ -9,6 +9,12 @@ Boundary probes: `probes/boundary.sh` (ผ่านแล้ว 2026-10-06)
 Core language: Python (D-012)
 Exit: sandbox, cgroup และ git isolation ใช้งานได้บนเครื่องจริง
 
+## GUI foundation ที่มีแล้ว (ยังไม่ปิด Phase 1)
+
+`python3 -m navis` เปิด local control GUI พร้อม in-process simulated agent, SQLite snapshot/events, task board, user requests และ lifecycle controls ดู [GUI Guide](GUI.md) สำหรับผลทดสอบและข้อจำกัด
+
+ยังไม่มี sandboxed fake-agent CLI, production Runner, MCP หรือ provider adapter; ไม่ถือว่า execution/boundary/process-tree acceptance scenarios ผ่านจากผลทดสอบ UI simulation
+
 ## Phase 1 — Single-agent MVP foundations
 
 สร้าง daemon, project/agent registry, adapter interface, durable task/attempt state, CLI และ UI เล็กบนเครื่องเดียว
