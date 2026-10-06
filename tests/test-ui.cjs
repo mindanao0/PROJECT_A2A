@@ -74,4 +74,24 @@ async function controls() {
   await node('#task-form').onsubmit({preventDefault(){},currentTarget:form});
   assert.equal(context.submissions[0].source_attempt_id,'displayed-source','Source must bind to the displayed option rather than the latest snapshot');
 }
+// Integration strip: real mode only, escaped, button enabled only when the runtime says it can promote.
+vm.runInContext(`
+  project='all';
+  snapshot={mode:'simulation',integration:[{project_id:'p',branch:'main',commit:'abcdef0123456789',tasks:[1],checks:[],can_promote:true,busy:null}]};
+  globalThis.strip=integrationStrip;
+`,context);
+assert.equal(context.strip(),'','Simulation must not show the integration strip');
+vm.runInContext(`snapshot={mode:'real',integration:[
+  {project_id:'<b>p</b>',branch:'<i>main</i>',commit:'abcdef0123456789',tasks:[1,2],checks:[{name:'<u>unit</u>',rc:0},{name:'lint',rc:1}],can_promote:true,busy:null},
+  {project_id:'q',branch:'main',commit:'1234567890abcdef',tasks:[3],checks:[],can_promote:false,reason:'your working tree has uncommitted changes',busy:null},
+  {project_id:'r',branch:'main',commit:null,tasks:[],checks:[],can_promote:false,busy:'7'}]};`,context);
+const strip = context.strip();
+assert(!strip.includes('<b>')&&!strip.includes('<i>')&&!strip.includes('<u>'),'Strip must escape project, branch and check names');
+assert(strip.includes('abcdef0123')&&strip.includes('lint ✗')&&strip.includes('&lt;u&gt;unit&lt;/u&gt; ✓'),'Commit and per-check results must be shown');
+assert(strip.includes('uncommitted changes'),'Reason must be visible when promote is not possible');
+assert(strip.includes('checking the merged commit for task 7'));
+const buttons = strip.match(/<button[^>]*data-promote[^>]*>/g);
+assert.equal(buttons.length,3);
+assert(!buttons[0].includes('disabled'),'Ready integration must be promotable');
+assert(buttons[1].includes('disabled')&&buttons[2].includes('disabled'),'Blocked or busy integration must be disabled');
 controls().then(()=>console.log('UI checks passed: full patch/result escaping, policy labels, queue escaping, prompt distinction, attention title, confirmation cancellation/stale attempts, displayed source attempt.')).catch(error=>{console.error(error);process.exitCode=1;});

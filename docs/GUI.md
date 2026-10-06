@@ -129,6 +129,7 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 | Stop/Kill | Native confirmation dialog, Cancel ไม่ส่ง command, ยึด observed attempt |
 | Event | filter task/type และเปิด full `output` ถ้า event มี field นี้; simulation ยังไม่มี prepare/check stdout จริง |
 | Real runtime controls | Banner เปลี่ยนตาม mode; REVIEW เปิด diff โดยตรงและแสดง approval; WAITING_INPUT แสดง input หรือแจ้งเมื่อ runtime ยังไม่ส่ง prompt; handoff เปิดเมื่อ `capabilities.handoff` ระบุพร้อมใช้งาน |
+| Integration (real) | งานที่ COMPLETED มีปุ่ม **Add to integration branch**: Runtime รวมผลบน `refs/navis/integration/<project>` และรัน check บน commit ที่รวมแล้ว; แถบ **Fast-forward <branch>** ในหน้า Overview/Task board เปิดเมื่อมี check ผ่านบน commit นั้นพอดี, working tree สะอาด และ branch ไม่ขยับ พร้อม dialog ยืนยัน (ไม่ push, ไม่รัน hooks) ไม่มีในโหมด simulation; ทดสอบด้วย `tests/gui-real-smoke.cjs` |
 | Provider/resource/settings | Agents อ่าน `providers` และ `cooldown_until`; Resources อ่าน `attempt.memory_bytes` หรือ `resources.attempt_memory_bytes`; Settings อ่าน `settings.editable/items` และส่ง `update_settings` เมื่อ runtime รองรับ |
 | Project setup | Add project เปิดใน real mode พร้อม path field และส่ง `create_project`; Runtime เป็นผู้ตรวจสิทธิ์และจัดเก็บ path |
 | Attention | Tab title แสดงจำนวน pending requests; browser notification เป็น opt-in ใช้เมื่อแท็บอยู่เบื้องหลังและยังเปิดอยู่ ไม่ทำ background/service-worker notifications และบาง mobile browser ไม่รองรับ |

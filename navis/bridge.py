@@ -9,10 +9,11 @@ import os
 import re
 import subprocess
 import time
+import threading
 import tomllib
 from pathlib import Path
 
-from . import runtime, sandbox
+from . import integrate, runtime, sandbox
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
@@ -26,7 +27,8 @@ MAX_DIFF, MAX_LOG, MAX_PROMPT = 200_000, 30_000, 20_000
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
-         "leak": "LEAK", "stale-result-dropped": "STALE"}
+         "leak": "LEAK", "stale-result-dropped": "STALE", "integrate": "INTEGRATE", "integrate-error": "INTEGRATE",
+         "promote": "PROMOTE"}
 
 
 def message(kind, d):
@@ -42,6 +44,10 @@ def message(kind, d):
             "instruction": lambda: "Instruction saved for the next attempt",
             "leak": lambda: "Agent credential found in a diff; result blocked",
             "stale-result-dropped": lambda: "Late result from a revoked attempt was dropped",
+            "integrate": lambda: (f"Integrated into the integration branch at {str(d.get('commit'))[:10]}; checks passed" if d.get("ok")
+                                  else f"Not integrated: checks failed on {str(d.get('commit'))[:10]}"),
+            "integrate-error": lambda: f"Not integrated: {d.get('error')}",
+            "promote": lambda: f"Your branch {d.get('branch')} fast-forwarded to {str(d.get('commit'))[:10]}",
             }.get(kind, lambda: kind)()
 
 
@@ -70,6 +76,8 @@ class Bridge:
         self.store = self.rt.store
         self.rt.start()
         self.diffs = {}
+        self.integrating = {}  # project -> task id, while its checks run in a background thread
+        self.lock = threading.Lock()
 
     def close(self):
         self.rt.shutdown()
@@ -254,12 +262,27 @@ class Bridge:
                 "tasks": [self.task_view(t, c, False) for t in c["rows"]],
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
+                "integration": self.integration(),
                 "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
                 "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
                               "memory_available": True, "mode": "real"},
                 "capabilities": {"fake": "scripted, sandboxed", "codex": "unverified", "claude": "unverified", "local": "not connected",
                                  "controls": {"graceful_stop": False},
                                  "handoff": {"claude_review": self.logged_in("claude"), "codex_continue": self.logged_in("codex")}}}
+
+    def integration(self):
+        out = []
+        for p in self.projects():
+            if p["path"] == "invalid":
+                continue
+            try:
+                st = integrate.status(self.store, p["id"])
+            except Exception:  # a repo that cannot be read must not break the poll
+                continue
+            busy = self.integrating.get(p["id"])
+            if st["tasks"] or busy:
+                out.append({**st, "project_id": st.pop("project"), "busy": str(busy) if busy else None})
+        return out
 
     def task_detail(self, task_id):
         c = self.context()
@@ -285,6 +308,14 @@ class Bridge:
             return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
+        if action == "promote_integration":
+            if p.get("project_id") not in {x["id"] for x in self.projects()}:
+                raise ControlError("Unknown project")
+            try:
+                commit = integrate.promote(s, p["project_id"], p.get("commit"))
+            except integrate.IntegrationError as e:
+                raise ControlError(str(e)[:300])
+            return {"ok": True, "message": f"Your branch was fast-forwarded to {commit[:10]}"}
         try:
             tid = int(p.get("task_id"))
         except (TypeError, ValueError):
@@ -313,6 +344,8 @@ class Bridge:
                 ok = st == "WAITING_INPUT" and runtime.answer(s, tid, clean_text(p.get("text"), "Answer", 2000))
             elif st in ("WAITING_APPROVAL", "REVIEW"):
                 ok = (runtime.approve if action == "approve" else runtime.reject)(s, tid)
+        elif action == "integrate":
+            out, ok = self.start_integrate(t), st == "COMPLETED"
         elif action in ("review_with_claude", "continue_with_codex"):
             out = self.hand_off(t, aid, "claude" if action == "review_with_claude" else "codex")
             ok = True
@@ -321,6 +354,28 @@ class Bridge:
         if not ok:
             raise ControlError(f"{action} is not possible while the task is {st}")
         return out
+
+    def start_integrate(self, t):
+        if t["status"] != "COMPLETED" or not t["head"]:
+            raise ControlError("Only a completed task with a result can be integrated")
+        with self.lock:
+            if t["project"] in self.integrating:
+                raise ControlError("An integration is already running for this project")
+            self.integrating[t["project"]] = t["id"]
+
+        def work():
+            try:
+                integrate.integrate(self.rt, t["id"])
+            except integrate.IntegrationError:
+                pass  # recorded as an event the GUI shows
+            except Exception as e:
+                self.store.log(t["id"], None, "integrate-error", error=f"unexpected: {e!r}"[:300])
+            finally:
+                with self.lock:
+                    self.integrating.pop(t["project"], None)
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "message": "Integrating; checks run on the merged commit. Watch the activity log."}
 
     def hand_off(self, t, aid, agent):
         if t["status"] != "COMPLETED" or not t["head"]:

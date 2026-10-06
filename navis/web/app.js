@@ -117,6 +117,15 @@ function board(tasks) {
     return `<section class="column" aria-label="${name}"><div class="column-heading"><span class="column-dot" aria-hidden="true"></span>${name}<span class="column-count">${items.length}</span></div>${items.length?items.slice(0,columnLimits[i]).map(card).join(''):'<div class="empty-column">No tasks here yet</div>'}${items.length>columnLimits[i]?`<button class="column-add" data-more-column="${i}">Show 12 more / ${items.length-columnLimits[i]} remaining</button>`:''}${name==='Queued'?'<button class="column-add" data-new-task>+ Add a task</button>':''}</section>`;
   }).join('')}</div>`;
 }
+function integrationStrip() {
+  if (simulation()) return '';
+  return (snapshot.integration||[]).filter(i=>project==='all'||i.project_id===project).map(i=>{
+    const checks=i.checks.map(c=>`${escapeHTML(c.name)} ${c.rc?'✗':'✓'}`).join(', ')||'no checks configured';
+    const detail=i.busy?`checking the merged commit for task ${escapeHTML(i.busy)}…`:`${i.tasks.length} task${i.tasks.length===1?'':'s'} merged at ${escapeHTML((i.commit||'').slice(0,10))} / checks on this exact commit: ${checks}`;
+    const why=!i.busy&&!i.can_promote&&i.reason?`<br><small class="muted">${escapeHTML(i.reason)}</small>`:'';
+    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></div>`;
+  }).join('');
+}
 function agentRow(name, desc, mark, status, className='', sub='') {
   return `<div class="agent-row"><span class="provider-mark ${className}" aria-hidden="true">${mark}</span><div class="agent-info"><strong>${name}</strong><small>${desc}</small></div><div class="agent-status ${status==='Ready'?'ready':status==='Cooldown'?'cooldown':''}">${status}<span>${sub}</span></div></div>`;
 }
@@ -203,6 +212,7 @@ function render() {
   } else if (view==='agents') {
     const providers=snapshot.providers||[];
     const providerCard=([name,mark,desc],provider)=>{const until=provider?.cooldown_until;const reported=provider?.status||(until?'Cooldown':'Unavailable');const state=['Ready','Busy','Cooldown','Unavailable','Not tested','Not connected','Error'].includes(reported)?reported:'Unavailable';const slotText=provider?.slot_limit!=null?`${provider.slots_used||0} / ${provider.slot_limit} slots`:provider?.reason||'No runtime status';const sub=`${escapeHTML(slotText)}${until?`<br>${timer(Number(until))}`:''}`;return `<section class="panel agent-card">${agentRow(name,desc,mark,state,state==='Ready'?'ready':state==='Cooldown'?'cooldown':'',sub)}<div class="capability-list"><span class="capability">${escapeHTML(provider?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(provider?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;};
+    html += integrationStrip();
     html = `<div class="agent-grid"><section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>${[['Codex','✳','Provider CLI/session'],['Claude Code','✽','Provider CLI/session'],['Local LLM','⌘','Text summaries and log analysis']].map((entry,i)=>{const key=['codex','claude','local'][i], provider=providers.find(p=>p.id===key||p.name?.toLowerCase().replace(/ code/,'').replace(/ llm/,'')===entry[0].toLowerCase());return providerCard(entry,provider);}).join('')}</div>`;
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
   else if (view==='artifacts') html = artifacts(tasks);
@@ -278,6 +288,7 @@ function updateDetail(force=false) {
   const activeLabel=tabLabels.find(([id])=>id===detailTab)?.[1]||'Results';
   $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
   $('#task-detail').querySelectorAll('textarea').forEach(el=>{if(saved[el.name])el.value=saved[el.name];});
+  if (!simulation()&&task.state==='COMPLETED'&&task.head) controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
   if (!force) $('#task-detail').querySelectorAll('details').forEach((el,i)=>{if(i<disclosureState.length)el.open=disclosureState[i];});
   if (!connected) $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
   restoreFocus(focus); updateCountdowns();
@@ -286,7 +297,7 @@ function taskCommand(action, extra={}) {
   const task = currentTask(); if (!task) return Promise.resolve(null);
   return command({action,task_id:task.id,attempt_id:task.attempt_id,...extra});
 }
-function confirmControl(action, task) {
+function confirmControl(action, task, info) {
   if (confirmPending) return Promise.resolve(false);
   confirmPending = true;
   const dialog = $('#confirm-dialog'); dialog.returnValue = '';
@@ -300,6 +311,13 @@ async function copyText(text) {
   try { if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(text);toast('Copied full text.'); }
   catch (_) { $('#copy-text').value=text;$('#copy-dialog').showModal();$('#copy-text').select(); }
 }
+  if (action==='promote') {
+    $('#confirm-title').textContent = 'Fast-forward your branch?';
+    $('#confirm-description').textContent = `Moves ${info.branch} to the integration commit. Your working tree is checked first, no repository hooks run and nothing is pushed.`;
+    $('#confirm-attempt').textContent = `${task.title} / commit ${task.attempt_id}`;
+    $('#confirm-control').textContent = 'Confirm fast-forward';
+    return new Promise(resolve=>{dialog.addEventListener('close',()=>{confirmPending=false;resolve(dialog.returnValue==='confirm');},{once:true});dialog.showModal();});
+  }
 document.addEventListener('click',async e=>{
   const close = e.target.closest('[data-close]'); if (close) {document.getElementById(close.dataset.close).close();return;}
   const nav = e.target.closest('[data-view]'); if (nav) {view=nav.dataset.view;search='';stateFilter='all';render();return;}
@@ -320,8 +338,17 @@ document.addEventListener('click',async e=>{
     if (['stop','kill'].includes(action)&&!await confirmControl(action,task)) return;
     control.disabled = true;
     const result = await command({action,...captured});
-    if (result) toast(result.expired?'Request expired; task blocked.':'Control accepted by runtime.');
+    if (result) toast(result.message||(result.expired?'Request expired; task blocked.':'Control accepted by runtime.'));
     control.disabled = false;
+  const promo = e.target.closest('[data-promote]'); if (promo) {
+    if (!connected||promo.disabled) return;
+    const i=(snapshot.integration||[]).find(x=>x.project_id===promo.dataset.promote); if (!i) return;
+    if (!await confirmControl('promote',{title:`${i.project_id}: ${i.tasks.length} task${i.tasks.length===1?'':'s'}`,attempt_id:(i.commit||'').slice(0,10)},i)) return;
+    promo.disabled=true;
+    const result=await command({action:'promote_integration',project_id:i.project_id,commit:i.commit});
+    if (result) toast(result.message||'Branch fast-forwarded.');
+    promo.disabled=false; return;
+  }
   }
 });
 $('#detail-dialog').addEventListener('close',()=>{selectedTask=null;taskDetail=null;detailSignature='';});

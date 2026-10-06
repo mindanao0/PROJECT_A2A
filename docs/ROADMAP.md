@@ -81,6 +81,11 @@ Review/test ต้องผูก exact commit; rebase/merge แล้วต้�
 
 Exit: สอง agent ไม่เขียน workspace/resource ชนกัน; late result และ stale evidence ไม่ถูกยอมรับ
 
+### Phase 2 status
+
+มีแล้ว: integration branch ตาม D-014 (`navis/integrate.py`): `navis-cli integrate <task>` รวมผล task ที่ COMPLETED บน `refs/navis/integration/<project>` ด้วย `git merge-tree` (ไม่แตะ working tree), รัน check ใน clone ของ commit ที่รวมแล้ว และเลื่อน ref ก็ต่อเมื่อผ่าน; `navis-cli integration <project>` ดูสถานะ; `navis-cli promote <project>` (หรือปุ่ม **Fast-forward** ใน GUI โหมด real และปุ่ม **Add to integration branch** ในรายละเอียดงาน) fast-forward branch ของผู้ใช้ โดยปฏิเสธเมื่อ working tree สกปรก, HEAD ไม่ใช่ branch, branch ขยับไปจาก integration, หรือไม่มี check ที่ผ่านบน commit นั้นพอดี และไม่รัน hooks
+ยังไม่มี: task dependencies, `request_review`/`delegate`, review ที่ผูก exact commit, integration ข้ามหลาย project, rollback ของ integration branch (ลบ ref ด้วย git เอง)
+
 ## Phase 3 — Context and resource optimization
 
 เพิ่ม Git-aware retrieval, conversation delta, versioned summaries, invalidation, bounded caches และ budgets
