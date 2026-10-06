@@ -94,6 +94,24 @@ class Runtime:
             last = self.db.execute("SELECT COALESCE(MAX(seq),0) FROM events").fetchone()[0]
             rows = self.db.execute("SELECT seq,body FROM events WHERE seq>? ORDER BY seq LIMIT 300", (cursor,)).fetchall()
             result = json.loads(json.dumps(self.state))
+            active = [t for t in result["tasks"] if t["state"] in ACTIVE]
+            for task in result["tasks"]:
+                reasons = []
+                if task["state"] == "QUEUED":
+                    if result["paused"]:
+                        reasons.append({"code": "paused", "message": "Dispatch is paused"})
+                    conflicts = [t for t in active if t["project_id"] == task["project_id"] and overlap(t["scope"], task["scope"])]
+                    for other in conflicts:
+                        reasons.append({"code": "scope", "task_id": other["id"], "message": f"Scope held by {other['title']}"})
+                    if active:
+                        reasons.append({"code": "slot", "message": "Fake-agent slot occupied (1/1)"})
+                    if not reasons:
+                        reasons.append({"code": "ready", "message": "Ready for the next dispatch tick"})
+                elif task["state"] == "WAITING_QUOTA":
+                    reasons.append({"code": "cooldown", "until": task["due"], "message": "Simulated cooldown"})
+                task["queue_reasons"] = reasons
+            result["resources"] = {"slots": [{"backend": "fake-agent", "used": len(active), "limit": 1}],
+                                   "memory_available": False, "mode": "simulation"}
             result.update(events=[dict(json.loads(body), seq=seq) for seq, body in rows],
                           cursor=rows[-1][0] if rows else cursor, latest_cursor=last,
                           capabilities={"fake": "simulated", "codex": "not tested", "claude": "not tested", "local": "not connected"})
@@ -157,7 +175,20 @@ class Runtime:
             scenario = p.get("scenario", "success")
             if not isinstance(scenario, str) or scenario not in SCENARIOS:
                 raise ControlError("Unsupported scenario")
-            key = hashlib.sha256(json.dumps([project_id, " ".join(spec.split()).casefold(), scope]).encode()).hexdigest()
+            source = None
+            source_id = p.get("source_task_id")
+            if source_id:
+                old = self.task(source_id)
+                if old["project_id"] != project_id or old["state"] != "COMPLETED":
+                    raise ControlError("Source must be a completed task in the same project")
+                if p.get("source_attempt_id") != old["attempt_id"]:
+                    raise ControlError("Source attempt changed. Select the source again.")
+                source = {"task_id": old["id"], "attempt_id": old["attempt_id"], "title": old["title"],
+                          "artifacts": [dict(a) for a in old["artifacts"] if a["attempt_id"] == old["attempt_id"]]}
+            key_data = [project_id, " ".join(spec.split()).casefold(), scope]
+            if source:
+                key_data.append([source["task_id"], source["attempt_id"], [a["hash"] for a in source["artifacts"]]])
+            key = hashlib.sha256(json.dumps(key_data).encode()).hexdigest()
             for old in self.state["tasks"]:
                 if old["key"] == key and old["state"] not in {"FAILED", "CANCELLED"}:
                     return {"task_id": old["id"], "duplicate": True}
@@ -166,7 +197,8 @@ class Runtime:
             task = {"id": identifier("task"), "project_id": project_id, "title": title, "spec": spec,
                     "scope": scope, "key": key, "scenario": scenario, "state": "QUEUED", "backend": "fake-agent",
                     "attempt_id": None, "attempts": [], "instructions": [], "artifacts": [], "pending": None,
-                    "created_at": now, "updated_at": now, "activity": "Waiting for the simulated agent slot", "stage": 0}
+                    "created_at": now, "updated_at": now, "activity": "Waiting for the simulated agent slot", "stage": 0,
+                    "source": source}
             self.state["tasks"].append(task)
             self.event("TASK_CREATED", task, title)
             return {"task_id": task["id"], "duplicate": False}
