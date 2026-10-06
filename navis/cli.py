@@ -5,7 +5,7 @@ import json
 import sys
 import time
 
-from . import helper, runtime
+from . import helper, integrate, runtime
 
 
 def show_tasks(store):
@@ -46,6 +46,9 @@ def main(argv=None):
                         ("reject", "reject a task in review")]:
         sub.add_parser(name, help=help_).add_argument("id", type=int)
     sub.add_parser("summarize", help="summarize a task with the local model (sources cited)").add_argument("id", type=int)
+    sub.add_parser("integrate", help="merge a completed task into the integration branch (checks run on the result)").add_argument("id", type=int)
+    sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
+    sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
     an.add_argument("id", type=int)
     an.add_argument("text")
@@ -71,6 +74,25 @@ def main(argv=None):
             sys.exit(f"summarize failed: {e}")
         print(r["text"], f"\ncited: {', '.join(r['cited']) or 'none'}",
               *([f"unverified refs: {', '.join(r['unknown_refs'])}"] if r["unknown_refs"] else []), sep="\n")
+    elif args.cmd == "integrate":
+        rt = runtime.Runtime(store)
+        try:
+            commit = integrate.integrate(rt, args.id)
+        except integrate.IntegrationError as e:
+            sys.exit(f"not integrated: {e}")
+        print(f"integrated at {commit[:10]}; checks passed")
+    elif args.cmd == "integration":
+        st = integrate.status(store, args.project)
+        print(f"branch {st['branch'] or '(detached)'} @ {st['head'][:10]}; integration @ {(st['commit'] or 'none')[:10]}")
+        print(f"tasks: {', '.join(map(str, st['tasks'])) or 'none'}; checks: " +
+              (", ".join(f"{c['name']} {'ok' if not c['rc'] else 'FAILED'}" for c in st["checks"]) or "none"))
+        print("can promote" if st["can_promote"] else f"cannot promote: {st['reason']}")
+    elif args.cmd == "promote":
+        try:
+            commit = integrate.promote(store, args.project)
+        except integrate.IntegrationError as e:
+            sys.exit(f"not promoted: {e}")
+        print(f"fast-forwarded to {commit[:10]}")
     elif args.cmd == "stop":
         print(runtime.stop_task(store, args.id))
     elif args.cmd == "answer":

@@ -239,6 +239,24 @@ class Runtime(BridgeTest):
         self.pump(lambda s: self.task(s, tid)["state"] == "CANCELLED")
         self.assertIsNone(self.task(self.b.snapshot(), tid)["attempts"][0]["memory_bytes"])
 
+    def test_integrate_then_fast_forward_from_the_gui(self):
+        tid = self.create(edit("src/x.py") + DONE)
+        self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
+        self.assertEqual(self.b.snapshot()["integration"], [])
+        self.cmd(tid, "integrate")
+        snap = self.pump(lambda s: any(i["can_promote"] for i in s["integration"]))
+        (i,) = snap["integration"]
+        self.assertEqual((i["project_id"], i["tasks"], i["busy"]), ("p", [int(tid)], None))
+        self.assertIn("Integrated into the integration branch", " ".join(e["message"] for e in snap["events"]))
+        before = self.git("rev-parse", "HEAD").strip()
+        with self.assertRaisesRegex(ControlError, "changed"):
+            self.b.command({"action": "promote_integration", "project_id": "p", "commit": before})
+        self.b.command({"action": "promote_integration", "project_id": "p", "commit": i["commit"]})
+        self.assertEqual(self.git("rev-parse", "HEAD").strip(), i["commit"])
+        self.assertEqual(self.b.snapshot()["integration"], [])
+        with self.assertRaisesRegex(ControlError, "Unknown project"):
+            self.b.command({"action": "promote_integration", "project_id": "nope"})
+
 
 class Http(BridgeTest):
     def test_server_drives_the_real_runtime(self):
