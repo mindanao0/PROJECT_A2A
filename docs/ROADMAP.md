@@ -126,6 +126,11 @@ Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wi
 เปิด local coding หลังผ่าน tool/permissions/workspace acceptance tests และมีการอนุญาตบทบาทนั้น
 ไม่บังคับให้ local helper เปลี่ยนเป็น coder เพื่อให้ MVP เสร็จ
 
+### Phase 4 status (2026-10-06)
+
+Agent Runner ของ local model สร้างและทดสอบแล้ว (`navis/local_agent.py`, adapter `local`): tool loop ที่จำกัดรอบ/คำสั่งผิด/คำสั่งซ้ำ/ความยาวต่อรอบ, permission enforcement (ไม่มี shell, path ถูกตรวจกับ workspace, ห้าม `.git`, symlink ออกนอกไม่ได้), cancellation และ recovery ผ่าน cgroup/Runner เดิม — ทุกเกณฑ์ของ MVP Contract มี test
+**บทบาทปิดเป็นค่าเริ่มต้น และแนะนำให้คงปิด:** ผลวัดกับโมเดล 7B ไม่มีงานใดจาก 3 งานผ่านครบ (cloud ผ่านครบ) และรอบ revision ที่ Claude รีวิวก็ไม่ช่วย รายละเอียดและวิธีเปิดอยู่ใน [Phase 4](PHASE4.md)
+
 ## Phase 5 — Advanced orchestration and UI
 
 เพิ่ม Team/Debate, dynamic scheduling, capability matching, adversarial review, multi-project scheduling และ A2A bridge เมื่อมี use case ที่พิสูจน์แล้ว

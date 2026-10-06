@@ -24,11 +24,14 @@ REVIEW_DIFF = 60_000
 QUOTA_RE = re.compile(r"rate.?limit|usage.?limit|quota", re.I)
 STOPPABLE = ("QUEUED", "WAITING_INPUT", "WAITING_APPROVAL", "WAITING_QUOTA", "REVIEW")
 DEFAULTS = {
-    "slots": {"codex": 1, "claude": 1, "fake": 2, "checks": 1},
+    "slots": {"codex": 1, "claude": 1, "fake": 2, "local": 1, "checks": 1},
     "limits": {"agent_memory": "3G", "check_memory": "4G", "attempt_timeout": 3600,
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600],
                "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
+    # Local coding is a role the user must switch on (D-004): off until the Agent Runner's tests are trusted.
+    "local": {"coding": False, "url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "max_turns": 20,
+              "max_tokens": 1024, "num_gpu": 0},  # num_gpu: 0 = Ollama decides; 99 = all layers on the GPU (see docs/PHASE4.md)
 }
 
 
@@ -140,7 +143,15 @@ def claude_cmd(prompt, mcp, home, io, readonly=False):
     return argv, {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
 
 
-ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd}
+def local_cmd(prompt, mcp, home, io, readonly=False):
+    cfg = load_config()["local"]
+    env = {"NAVIS_MCP": json.dumps(mcp), "NAVIS_LOCAL_URL": cfg["url"], "NAVIS_LOCAL_MODEL": cfg["model"],
+           "NAVIS_LOCAL_MAX_TURNS": str(cfg["max_turns"]), "NAVIS_LOCAL_MAX_TOKENS": str(cfg["max_tokens"]),
+           "NAVIS_LOCAL_NUM_GPU": str(cfg["num_gpu"]), "NAVIS_LOCAL_READONLY": "1" if readonly else "0"}
+    return [sandbox.PY, "-m", "navis.local_agent", prompt], env, []
+
+
+ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd, "local": local_cmd}
 
 
 # User commands
@@ -150,6 +161,8 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", sourc
     """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
+    if agent == "local" and not load_config()["local"]["coding"]:
+        raise ValueError("local coding is off; set coding = true under [local] in config.toml to allow it")
     proj = load_project(project)
     scope = norm_scope(scope)
     sha = subprocess.run(["git", "-C", proj["path"], "rev-parse", "--verify", f"{base}^{{commit}}"],

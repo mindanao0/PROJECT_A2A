@@ -228,7 +228,7 @@ function openTaskForm(source=null) {
   $('#task-form').reset(); $('#task-form .form-error').textContent = '';
   const agentSelect = $('#task-agent'), isReal = !simulation();
   agentSelect.disabled = !isReal; agentSelect.name = isReal ? 'agent' : '';
-  if (isReal) agentSelect.innerHTML = (snapshot.providers||[]).map(p=>`<option value="${escapeHTML(p.id)}" ${p.ok?'':'disabled'}>${escapeHTML(p.name)}${p.ok?'':' (not logged in)'}</option>`).join('');
+  if (isReal) agentSelect.innerHTML = (snapshot.providers||[]).map(p=>`<option value="${escapeHTML(p.id)}" ${p.ok?'':'disabled'}>${escapeHTML(p.name)}${p.ok?'':` (${escapeHTML((p.reason||'unavailable').toLowerCase())})`}</option>`).join('');
   $('#task-scenario').closest('label').hidden = isReal;
   $('#create-description').textContent = isReal ? 'The agent works in a sandboxed clone of the project; your checkout is never touched.' : 'This task runs against a simulated agent. It cannot access your repository.';
   $('#source-description').textContent = isReal ? 'The new task starts from the result commit of that task (its refs/navis/attempts/* ref).' : 'Source artifacts are copied as a simulation context reference; no Git branch is created.';

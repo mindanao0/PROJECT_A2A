@@ -8,6 +8,8 @@ the requirement and a few visible tests (its `ok` check); the harness then runs 
 sandbox without network, on the final result commit. Configs:
   claude / codex   one agent implements (Runner retries once if the visible check fails)
   pipeline         codex implements, claude reviews (read-only), codex revises once if the review asks for changes
+  local            the local model implements (needs Ollama; [local] coding is switched on for the run)
+  local+review     local implements, claude reviews, local revises once if the review asks for changes
 Prints per-cell results and per-config totals; raw numbers also go to the file given by --out."""
 
 import argparse
@@ -129,6 +131,11 @@ TASKS = {
 }
 
 
+# config -> (implementer, reviewer or None); a review that asks for changes triggers one revision by the implementer
+CONFIGS = {"claude": ("claude", None), "codex": ("codex", None), "pipeline": ("codex", "claude"),
+           "local": ("local", None), "local+review": ("local", "claude")}
+
+
 def hidden_score(proj, ref, task):
     """(passed, total, failing test names) of the hidden tests on commit `ref`, run in a sandbox without network."""
     with tempfile.TemporaryDirectory(prefix="nvh", dir="/tmp") as d:
@@ -172,7 +179,8 @@ def run_cell(name, task, config, agents_dir):
     (work / "home/agents").mkdir(parents=True)
     (work / "cfg/projects").mkdir(parents=True)
     for a in ("codex", "claude"):
-        (work / "home/agents" / a).symlink_to(agents_dir / a)
+        if (agents_dir / a).exists():
+            (work / "home/agents" / a).symlink_to(agents_dir / a)
     proj = work / "proj"
     (proj / "src").mkdir(parents=True)
     (proj / "tests").mkdir()
@@ -184,6 +192,7 @@ def run_cell(name, task, config, agents_dir):
     subprocess.run([*git, "commit", "-qm", "seed"], check=True)
     (work / "cfg/projects/p.toml").write_text(
         f'path = "{proj}"\n[checks]\nok = "python3 -m unittest discover -s tests -q"\n')
+    (work / "cfg/config.toml").write_text("[local]\ncoding = true\nmax_turns = 25\nnum_gpu = 99\n")
     os.environ.update(NAVIS_HOME=str(work / "home"), NAVIS_CONFIG=str(work / "cfg"))
     from navis import runtime, usage
     s = runtime.open_store()
@@ -197,22 +206,18 @@ def run_cell(name, task, config, agents_dir):
         stages.append(f"{label}:{row['status']}")
         return row["status"]
 
-    if config in ("claude", "codex"):
-        tid, _ = runtime.add_task(s, "p", config, task["spec"], scope)
-        rt.run_until_idle(900)
-        if stage("impl", tid) == "COMPLETED":
-            final = tid
-    else:
-        tid, _ = runtime.add_task(s, "p", "codex", task["spec"], scope)
-        rt.run_until_idle(900)
-        if stage("impl", tid) == "COMPLETED":
-            final = tid
-            runtime.request_review(s, tid, "claude")
+    implementer, reviewer = CONFIGS[config]
+    tid, _ = runtime.add_task(s, "p", implementer, task["spec"], scope)
+    rt.run_until_idle(900)
+    if stage("impl", tid) == "COMPLETED":
+        final = tid
+        if reviewer:
+            runtime.request_review(s, tid, reviewer)
             rt.run_until_idle(900)
             verdict = runtime.reviews(s, tid)[0]["verdict"] if runtime.reviews(s, tid) else "none"
             stages.append(f"review:{verdict}")
             if verdict == "changes":
-                rid, _ = runtime.revise(s, tid, "codex")
+                rid, _ = runtime.revise(s, tid, implementer)
                 rt.run_until_idle(900)
                 if stage("revise", rid) == "COMPLETED":
                     final = rid
@@ -230,7 +235,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--tasks", default=",".join(TASKS))
-    ap.add_argument("--configs", default="claude,codex,pipeline")
+    ap.add_argument("--configs", default="claude,codex,pipeline", help=",".join(CONFIGS))
     ap.add_argument("--out")
     args = ap.parse_args()
     if args.selftest:
