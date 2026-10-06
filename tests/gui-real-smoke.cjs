@@ -56,6 +56,10 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.notEqual(git('rev-parse', 'HEAD').trim(), before);
     assert.equal(git('show', 'HEAD:src/x.py'), 'x = 1\n');
     assert.equal(git('status', '--porcelain').trim(), '');
+    for (const view of ['overview', 'tasks', 'agents', 'activity', 'artifacts', 'resources', 'settings']) {  // every page still renders
+      await page.locator(`.sidebar [data-view="${view}"]`).click();
+      assert(await page.locator('#content').innerText().then(x => x.trim().length > 20), `view ${view} rendered nothing`);
+    }
     assert.equal(errors.length, 0, errors.join('\n'));
     console.log('Real-runtime browser checks passed: create, integrate, discard, integrate again, fast-forward.');
   } finally {
