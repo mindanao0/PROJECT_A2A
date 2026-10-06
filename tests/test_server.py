@@ -90,6 +90,21 @@ class TransportTests(unittest.TestCase):
         self.server.session_token = 'new-session-after-restart'
         self.assertEqual(self.request(headers=session)[0], 401)
 
+    def test_full_task_evidence_is_loaded_only_for_selected_task(self):
+        project = self.runtime.command({'action':'create_project','name':'Example'})
+        created = self.runtime.command({'action':'create_task','project_id':project['id'],'title':'Evidence','spec':'Review output','scope':'src/'})
+        task = self.runtime.task(created['task_id'])
+        task['artifacts'].append({'id':'artifact-test','kind':'diff','name':'Patch','attempt_id':'attempt-test','content':'+safe test payload','files':[]})
+        self.runtime.save()
+        status, body, _ = self.request(headers=self.auth())
+        self.assertEqual(status,200)
+        self.assertNotIn(b'+safe test payload',body)
+        self.assertEqual(self.request(path=f"/api/tasks/{task['id']}")[0],401)
+        status, body, _ = self.request(path=f"/api/tasks/{task['id']}",headers=self.auth())
+        self.assertEqual(status,200)
+        self.assertIn(b'+safe test payload',body)
+        self.assertEqual(self.request(path='/api/tasks/unknown-task',headers=self.auth())[0],404)
+
 
 if __name__ == '__main__':
     unittest.main()
