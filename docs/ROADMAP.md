@@ -77,7 +77,7 @@ Codex implements -> Claude independently reviews -> verifier checks integration 
 
 เพิ่ม merge/integration queue, conflict handling และ rollback ของ managed workspace
 Review/test ต้องผูก exact commit; rebase/merge แล้วต้องตรวจ final integration commit ใหม่
-รายละเอียด local commit/merge authority ยังอยู่ใน OD-008; MVP ไม่ auto push/merge/deploy
+Merge authority ตาม D-014: Runtime รวมงานบน `refs/navis/integration/<project>` ผู้ใช้ fast-forward เอง; MVP ไม่ auto push/merge/deploy
 
 Exit: สอง agent ไม่เขียน workspace/resource ชนกัน; late result และ stale evidence ไม่ถูกยอมรับ
 
