@@ -34,11 +34,13 @@ class Store:
         c = self._conn()
         try:
             c.executescript(SCHEMA)
-            have = {r["name"] for r in c.execute("pragma table_info(tasks)")}
-            for col, ddl in (("kind", "text not null default ''"), ("target", "integer"), ("after", "integer"),
-                             ("parent", "integer"), ("round", "integer not null default 0")):
-                if col not in have:  # databases created before reviews existed
-                    c.execute(f"alter table tasks add column {col} {ddl}")
+            for table, cols in (("tasks", (("kind", "text not null default ''"), ("target", "integer"), ("after", "integer"),
+                                           ("parent", "integer"), ("round", "integer not null default 0"))),
+                                ("attempts", (("prompt_bytes", "integer"), ("usage", "text")))):
+                have = {r["name"] for r in c.execute(f"pragma table_info({table})")}
+                for col, ddl in cols:
+                    if col not in have:  # databases created before the column existed
+                        c.execute(f"alter table {table} add column {col} {ddl}")
         finally:
             c.close()
 
