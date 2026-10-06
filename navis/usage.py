@@ -27,6 +27,9 @@ def parse(agent, text):
             tot["cached"] += u.get("cached_input_tokens", 0)
             tot["output"] += u.get("output_tokens", 0) + u.get("reasoning_output_tokens", 0)
             tot["turns"] += 1
+        elif agent == "local" and e.get("type") == "usage":
+            seen = True
+            tot.update(input=e.get("input", 0), output=e.get("output", 0), turns=e.get("turns", 0))
         elif agent == "claude" and e.get("type") == "result" and e.get("usage"):
             u, seen = e["usage"], True
             tot["input"] = u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)

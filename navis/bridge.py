@@ -20,8 +20,9 @@ DONE = ("COMPLETED", "FAILED", "CANCELLED")
 LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
 PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
              ("codex", "Codex", "Codex CLI adapter (unverified)"),
-             ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"))
-SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4),
+             ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"),
+             ("local", "Local model", "Local coding agent over a loopback model (tools: files + checks, no shell)"))
+SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4), ("slots.local", "Local model slots", 1, 2),
             ("slots.claude", "Claude Code slots", 1, 4), ("limits.attempt_timeout", "Attempt timeout (seconds)", 60, 86400))
 MAX_DIFF, MAX_LOG, MAX_PROMPT, MAX_DIFFS = 200_000, 30_000, 20_000, 64
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
@@ -102,6 +103,8 @@ class Bridge:
         return out
 
     def logged_in(self, name):
+        if name == "local":  # no login: a role the user switches on in config.toml
+            return bool(self.rt.cfg["local"]["coding"])
         f = LOGIN_FILE.get(name)
         return not f or (runtime.data_dir() / "agents" / name / f).exists()
 
@@ -113,9 +116,10 @@ class Bridge:
             out.append({"id": pid, "name": name, "ok": ok, "slots_used": busy.get(pid, 0), "slot_limit": slots.get(pid, 1),
                         "status": "Unavailable" if not ok else "Cooldown" if until else "Busy" if busy.get(pid) else "Ready",
                         "cooldown_until": until, "capability": desc,
-                        "reason": "Not logged in" if not ok else None,
-                        "message": ("Log in this agent's Navis account once, outside the GUI (see the README). "
-                                    "Your normal CLI login is not used.") if not ok else
+                        "reason": ("Local coding is off" if pid == "local" else "Not logged in") if not ok else None,
+                        "message": (("Set coding = true under [local] in config.toml to allow local coding." if pid == "local" else
+                                     "Log in this agent's Navis account once, outside the GUI (see the README). "
+                                     "Your normal CLI login is not used.")) if not ok else
                                    "Provider cooldown starts when the CLI reports a quota or rate limit." if pid != "fake" else
                                    "Runs scripted scenarios inside the same sandbox as real agents."})
         return out
