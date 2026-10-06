@@ -18,6 +18,12 @@ TOOLS = [
      "description": "Ask the user a question, then end your turn. The task resumes with the answer.",
      "inputSchema": {"type": "object", "required": ["question"], "properties": {
          "question": {"type": "string"}}}},
+    {"name": "delegate",
+     "description": "Queue follow-up work as a separate task that starts after you finish, from your result. "
+                    "scope must stay inside yours. Limited in number; delegated tasks cannot delegate.",
+     "inputSchema": {"type": "object", "required": ["title", "spec", "scope"], "properties": {
+         "title": {"type": "string"}, "spec": {"type": "string"},
+         "scope": {"type": "array", "items": {"type": "string"}}}}},
     {"name": "run_check",
      "description": "Run a project check (tests, lint) in a sandbox without network. "
                     "Returns the exit code and the end of the output.",

@@ -123,7 +123,7 @@ function integrationStrip() {
     const checks=i.checks.map(c=>`${escapeHTML(c.name)} ${c.rc?'✗':'✓'}`).join(', ')||'no checks configured';
     const detail=i.busy?`checking the merged commit for task ${escapeHTML(i.busy)}…`:`${i.tasks.length} task${i.tasks.length===1?'':'s'} merged at ${escapeHTML((i.commit||'').slice(0,10))} / checks on this exact commit: ${checks}`;
     const why=!i.busy&&!i.can_promote&&i.reason?`<br><small class="muted">${escapeHTML(i.reason)}</small>`:'';
-    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></div>`;
+    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.review_needed&&!i.busy?`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" ${snapshot.capabilities?.handoff?.claude_review===true?'':'disabled title="Claude is not logged in."'}>Review with Claude</button>`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
   }).join('');
 }
 function agentRow(name, desc, mark, status, className='', sub='') {
@@ -279,12 +279,14 @@ function updateDetail(force=false) {
     controls.push(`<button class="button secondary" data-action="continue_with_codex" ${handoff.codex_continue===true?'':'disabled title="Codex continuation is unavailable until the runtime reports a logged-in adapter."'}>Continue with Codex</button>`);
   }
   if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
+  const latestReview = (task.reviews||[])[0];
+  if (!simulation()&&task.state==='COMPLETED'&&task.kind!=='review'&&latestReview&&latestReview.verdict==='changes'&&!latestReview.stale) controls.push('<button class="button primary" data-action="revise" title="Queue a bounded follow-up round that starts from this result and carries the reviewer findings.">Revise from review</button>');
   let request = '';
   if (task.pending) request = `<section class="request-box"><h3>${task.state==='WAITING_APPROVAL'?'Approval required':'Your input is needed'}</h3><p>${escapeHTML(task.pending.message)}</p><small>Expires at ${date(task.pending.expires)} / bound to the displayed attempt</small>${task.state==='WAITING_APPROVAL'?`<div class="detail-actions"><button class="button primary" data-action="approve">${simulation()?'Approve simulation':'Approve request'}</button><button class="button danger" data-action="reject">Reject</button></div>`:'<form id="answer-form"><label>Your answer<textarea id="task-answer" name="answer" required maxlength="2000" rows="2"></textarea></label><button class="button primary" type="submit">Send answer →</button></form>'}</section>`;
   else if (task.state==='REVIEW') request = `<section class="request-box"><h3>Approve reviewed attempt</h3><p>The runner has not supplied a separate approval question. Review the diff and verification evidence above before approving.</p><div class="detail-actions"><button class="button primary" data-action="approve">Approve attempt</button><button class="button danger" data-action="reject">Reject attempt</button></div></section>`;
   else if (task.state==='WAITING_INPUT') request = `<section class="request-box"><h3>Waiting for your input</h3><p>The runtime has not supplied the input prompt yet. Refresh the task details or inspect its event output.</p><button class="text-button" data-open-output data-task="${escapeHTML(task.id)}">Open task output ↗</button></section>`;
   const reviewItems = (task.reviews||[]).map(r=>`<li><strong>${r.verdict==='approve'?'Approved':'Changes requested'}</strong> by ${escapeHTML(r.reviewer)}${r.reviewer===r.implementer?' (same agent as the implementer)':''}${r.stale?' / reviewed an older result, not this commit':''}<br><span class="muted">${String(r.summary||'').split('\n').map(escapeHTML).join('<br>')}</span></li>`).join('');
-  const reviewBlock = reviewItems ? `<section class="detail-section"><h3>Reviews</h3><ul class="queue-reasons">${reviewItems}</ul></section>` : '';
+  const reviewBlock = (reviewItems||task.round) ? `<section class="detail-section"><h3>Reviews</h3>${task.round?`<p class="muted">Revision round ${task.round}</p>`:''}<ul class="queue-reasons">${reviewItems}</ul></section>` : '';
   const reasons = task.queue_reasons || [];
   const tabLabels=[['results','Results'],['diff','Code diff'],['log','Agent output'],['prompt','Prompt / instructions'],['attempts','Attempts']];
   const activeLabel=tabLabels.find(([id])=>id===detailTab)?.[1]||'Results';
@@ -313,11 +315,12 @@ async function copyText(text) {
   try { if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(text);toast('Copied full text.'); }
   catch (_) { $('#copy-text').value=text;$('#copy-dialog').showModal();$('#copy-text').select(); }
 }
-  if (action==='promote') {
-    $('#confirm-title').textContent = 'Fast-forward your branch?';
-    $('#confirm-description').textContent = `Moves ${info.branch} to the integration commit. Your working tree is checked first, no repository hooks run and nothing is pushed.`;
+  if (action==='promote'||action==='discard') {
+    const discard = action==='discard';
+    $('#confirm-title').textContent = discard ? 'Discard the integration branch?' : 'Fast-forward your branch?';
+    $('#confirm-description').textContent = discard ? 'Drops the Navis integration branch. Completed tasks stay completed and can be integrated again; your branch is not touched.' : `Moves ${info.branch} to the integration commit. Your working tree is checked first, no repository hooks run and nothing is pushed.`;
     $('#confirm-attempt').textContent = `${task.title} / commit ${task.attempt_id}`;
-    $('#confirm-control').textContent = 'Confirm fast-forward';
+    $('#confirm-control').textContent = discard ? 'Confirm discard' : 'Confirm fast-forward';
     return new Promise(resolve=>{dialog.addEventListener('close',()=>{confirmPending=false;resolve(dialog.returnValue==='confirm');},{once:true});dialog.showModal();});
   }
 document.addEventListener('click',async e=>{
@@ -340,7 +343,7 @@ document.addEventListener('click',async e=>{
     if (['stop','kill'].includes(action)&&!await confirmControl(action,task)) return;
     control.disabled = true;
     const result = await command({action,...captured});
-    if (result) toast(result.message||(result.expired?'Request expired; task blocked.':'Control accepted by runtime.'));
+    if (result) toast(result.message||(result.task_id&&action==='revise'?(result.duplicate?'That revision is already queued.':`Revision queued as task ${result.task_id}.`):result.expired?'Request expired; task blocked.':'Control accepted by runtime.'));
     control.disabled = false;
   const promo = e.target.closest('[data-promote]'); if (promo) {
     if (!connected||promo.disabled) return;
@@ -350,6 +353,22 @@ document.addEventListener('click',async e=>{
     const result=await command({action:'promote_integration',project_id:i.project_id,commit:i.commit});
     if (result) toast(result.message||'Branch fast-forwarded.');
     promo.disabled=false; return;
+  }
+  const discardBtn = e.target.closest('[data-discard]'); if (discardBtn) {
+    if (!connected||discardBtn.disabled) return;
+    const i=(snapshot.integration||[]).find(x=>x.project_id===discardBtn.dataset.discard); if (!i) return;
+    if (!await confirmControl('discard',{title:`${i.project_id}: ${i.tasks.length} task${i.tasks.length===1?'':'s'}`,attempt_id:(i.commit||'').slice(0,10)},i)) return;
+    discardBtn.disabled=true;
+    const result=await command({action:'discard_integration',project_id:i.project_id,commit:i.commit});
+    if (result) toast(result.message||'Integration branch discarded.');
+    discardBtn.disabled=false; return;
+  }
+  const reviewInt = e.target.closest('[data-review-integration]'); if (reviewInt) {
+    if (!connected||reviewInt.disabled) return;
+    reviewInt.disabled=true;
+    const result=await command({action:'review_integration',project_id:reviewInt.dataset.reviewIntegration,agent:'claude'});
+    if (result) toast(result.duplicate?'A matching review is already queued.':'Review queued; the verdict appears here when it finishes.');
+    reviewInt.disabled=false; return;
   }
   }
 });

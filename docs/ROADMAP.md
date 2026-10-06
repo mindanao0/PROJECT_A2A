@@ -85,7 +85,28 @@ Exit: สอง agent ไม่เขียน workspace/resource ชนกั�
 
 มีแล้ว: integration branch ตาม D-014 (`navis/integrate.py`): `navis-cli integrate <task>` รวมผล task ที่ COMPLETED บน `refs/navis/integration/<project>` ด้วย `git merge-tree` (ไม่แตะ working tree), รัน check ใน clone ของ commit ที่รวมแล้ว และเลื่อน ref ก็ต่อเมื่อผ่าน; `navis-cli integration <project>` ดูสถานะ; `navis-cli promote <project>` (หรือปุ่ม **Fast-forward** ใน GUI โหมด real และปุ่ม **Add to integration branch** ในรายละเอียดงาน) fast-forward branch ของผู้ใช้ โดยปฏิเสธเมื่อ working tree สกปรก, HEAD ไม่ใช่ branch, branch ขยับไปจาก integration, หรือไม่มี check ที่ผ่านบน commit นั้นพอดี และไม่รัน hooks
 Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review with Claude**): review task แบบอ่านอย่างเดียวบน commit ผลพอดี reviewer เห็น requirement + diff + ผล check ของ Runtime ไม่เห็นบันทึกของ implementer, verdict ผูก commit, ถ้า reviewer แก้ไฟล์ verdict เป็นโมฆะ; config `require_review = true` ใน project toml ทำให้ integrate ต้องมี review ที่ approve commit นั้น ลองกับของจริงทั้งสองทิศ (`python3 probes/adapter.py codex|claude review`: Codex เขียน → Claude รีวิว 8 s; Claude เขียน → Codex รีวิว 23 s; reviewer ของ Claude มี tool เพียง Glob/Grep/Read + navis)
-ยังไม่มี: task dependencies, `delegate`/proposal/critique หลายรอบ (bounded rounds), reviewer ที่ตรวจ integration commit สุดท้าย (ตอนนี้ review ผูกกับ commit ของ task ส่วน check รันบน integration commit), integration ข้ามหลาย project, rollback ของ integration branch (ลบ ref ด้วย git เอง); ยังไม่เคยลองให้ reviewer จับบั๊กจริง (รอบทดสอบใช้งานเล็กที่ถูกต้อง จึงยืนยันได้เฉพาะกลไก ไม่ใช่คุณภาพของ review)
+เพิ่มแล้ว (รอบสุดท้ายของ Phase 2):
+- **Task dependency:** `navis-cli add --after <task>` (หรือ `after_task_id` ใน bridge) งานรอจน task นั้น COMPLETED แล้วเริ่มจากผลของมัน; ถ้า dependency ล้ม งานค้าง QUEUED พร้อมเหตุผลใน GUI; integrate งานที่ต่อยอดต้อง integrate ต้นทางก่อน
+- **Revision แบบจำกัดรอบ:** `navis-cli revise <task>` / ปุ่ม **Revise from review**: เริ่มจาก commit ที่ถูกรีวิว พก findings เป็น context; จำกัดด้วย `[limits] review_rounds` (ค่าเริ่มต้น 2) เกินแล้วต้องตัดสินใจเอง
+- **Delegate:** MCP tool `delegate(title, spec, scope)` ให้ agent แตกงานต่อ: scope ต้องอยู่ใน scope ของตัวเอง, ลึก 1 ชั้น (task ที่ถูก delegate ไม่ delegate ต่อ), ไม่เกิน `[limits] max_delegations` (ค่าเริ่มต้น 3), เริ่มหลัง parent จบจากผลของ parent; review task ไม่ delegate; `request_review` ไม่ใช่ tool ของ agent (ผู้ใช้หรือ policy เป็นคนสั่ง เพื่อไม่ให้ implementer เลือก reviewer ของตัวเอง)
+- **Review ของ integration commit สุดท้าย:** `navis-cli review-integration <project> -a ...` / ปุ่มในแถบ integration; เมื่อ `require_review = true` promote ต้องมี review ที่ approve commit รวมนั้นพอดี (fast-forward ของ commit ที่ approve แล้วไม่ต้องรีวิวซ้ำ; รวมงานเพิ่มแล้ว commit เปลี่ยน approval เดิมใช้ไม่ได้)
+- **Rollback:** `navis-cli discard <project>` / ปุ่ม **Discard** ลบ integration branch (task ยัง COMPLETED และ integrate ใหม่ได้; branch ของผู้ใช้ไม่ถูกแตะ)
+- review task ไม่จอง scope และไม่ถูกนับเป็น "งานที่ทำแล้ว ห้ามทำซ้ำ" ของ agent อื่น
+
+### Phase 2 evidence (2026-10-06; pytest 97 เคสผ่าน; agent จริง: codex-cli 0.160.1, claude 2.1.291)
+
+| เกณฑ์ | Evidence | สถานะ |
+| --- | --- | --- |
+| สอง agent ทำงานพร้อมกันโดยไม่ชนกัน | `python3 probes/adapter.py codex pair`: Codex กับ Claude รันพร้อมกัน 7 s บน scope แยกกัน clone แยกกัน แล้ว integrate ได้ commit เดียวที่มีไฟล์ของทั้งคู่และ check ผ่านบน commit รวม; scope ทับกันไม่รันพร้อมกัน (`test_overlapping_scopes_never_run_together`) | ผ่าน |
+| Codex implement → Claude review และสลับบทบาท | `adapter.py codex\|claude review` ทั้งสองทิศ | ผ่าน |
+| Reviewer จับบั๊กได้จริง และ revision แก้ได้ | `adapter.py claude loop`: ฝังบั๊ก (`a - b`, ไม่จัดการ None, ไม่มี test) → Claude CHANGES ครบสามข้อ → Codex revise (แก้ + เขียน test) → Claude APPROVE | ผ่าน |
+| รอบที่ไม่ลู่เข้าถูกจำกัด | `adapter.py codex loop`: Codex เป็น reviewer เข้มกว่า (จับว่า `or 0` ผิดกับค่า falsy อื่น) รอบ revise แรกจึงยัง CHANGES — ระบบหยุดที่ `review_rounds`, ไม่วนไม่จบ (`test_rounds_are_bounded_...`) | ผ่าน (พฤติกรรมตามออกแบบ) |
+| Review/test ผูก exact commit และ stale เมื่อ commit เปลี่ยน | `test_review_gate_blocks_integration_until_the_exact_commit_is_approved`, `test_a_change_request_blocks_and_new_integration_makes_the_approval_stale`, `test_promote_is_bound_to_the_commit_the_user_saw_and_runs_no_hooks` | ผ่าน |
+| Late result / stale evidence ไม่ถูกยอมรับ | Phase 1: `test_runner_restart_requeues_and_rejects_stale_result`, `test_instruction_during_an_attempt_discards_its_result`; Phase 2: revision ไม่ได้รับ approval ของ commit เดิม (`test_rounds_are_bounded_and_an_old_approval_does_not_cover_the_revision`) | ผ่าน |
+| Conflict handling | `test_conflicting_result_is_rejected_and_the_ref_stays`, `test_checks_run_on_the_merged_commit_and_a_failure_does_not_advance_the_ref` | ผ่าน |
+| Rollback ของ workspace ที่ Navis จัดการ | `test_discard_drops_the_integration_branch_and_tasks_can_be_integrated_again`; GUI: `tests/gui-real-smoke.cjs` | ผ่าน |
+
+ข้อจำกัดที่ยังเหลือ: คุณภาพของ review วัดจากบั๊กที่ฝังเองกรณีเดียว (ไม่ใช่ชุดเปรียบเทียบ); Debate/consensus หลายรอบแบบ proposal/critique ระหว่าง agent โดยไม่ผ่านผู้ใช้เป็นงาน Phase 5 (OD-017); dependency มีต้นทางเดียว (ไม่มี fan-in หลาย dependency); GUI ยังไม่มีช่องเลือก dependency ตอนสร้างงาน (ใช้ CLI หรือ bridge); การประเมิน quota รวมของวงจร implement→review→revise ยังไม่ได้วัด (ใช้ token จริงทุกรอบ)
 
 ## Phase 3 — Context and resource optimization
 

@@ -231,3 +231,6 @@ textarea { resize: vertical; }
 @media (max-width: 450px) { .board { grid-template-columns: 1fr; }.column { min-height: 0; }.column-heading { margin-bottom: 11px; }.empty-column { padding: 18px 5px; }.stat { padding: 13px; }.stat-value { font-size: 27px; }.stat-top > span { display: none; }.breadcrumb { margin: 0 8px; } }
 @media (pointer: coarse) { button, summary { min-height: 44px; }input, textarea, select { font-size: 16px; }.badge { min-height: auto; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.strip-actions { display: flex; gap: 9px; margin-left: auto; flex-wrap: wrap; }
+.strip-actions button { margin-left: 0; }
