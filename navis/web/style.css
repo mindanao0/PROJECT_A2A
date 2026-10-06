@@ -28,9 +28,16 @@ p { margin: 0 0 14px; }
 .muted { color: var(--muted); }
 .shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 100vh; }
 .sidebar { background: #101011; border-right: 1px solid var(--line); padding: 26px 16px 18px; display: flex; flex-direction: column; }
-.brand { display: flex; align-items: center; gap: 13px; font-size: 31px; font-weight: 700; letter-spacing: -1.5px; padding: 0 10px; }
-.brand-mark { display: grid; place-items: center; width: 36px; height: 39px; background: var(--accent); color: #100305; font: 700 25px var(--mono); clip-path: polygon(0 0, 75% 0, 100% 25%, 100% 100%, 25% 100%, 0 75%); }
-.brand-dot { color: var(--accent); margin-left: 5px; font-weight: 400; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 8px; min-height: 44px; }
+.brand-mark { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 42px; }
+.brand-mark svg { display: block; width: 42px; height: 42px; overflow: visible; }
+.mark-frame { fill: #171214; stroke: #65303b; stroke-width: 1.5; }
+.mark-route { fill: none; stroke: var(--accent); stroke-width: 4.4; stroke-linecap: square; stroke-linejoin: bevel; }
+.mark-node { fill: #ffe5e9; stroke: #c52e40; stroke-width: 1.4; }
+.brand-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.brand-name { color: #f5eff1; font: 700 21px/1.2 var(--mono); letter-spacing: 2px; }
+.brand-period { color: var(--accent); }
+.brand-subtitle { color: var(--muted); font: 9px/1.4 var(--mono); letter-spacing: 1.15px; white-space: nowrap; }
 .workspace-tag { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); background: var(--panel2); margin: 28px 0 28px; padding: 12px 10px; font-size: 12px; }
 .avatar { display: grid; place-items: center; width: 31px; height: 31px; flex-shrink: 0; border: 1px solid #71303a; background: var(--accent-dim); color: var(--accent-soft); font: 12px var(--mono); }
 .workspace-tag .signal { margin-left: auto; }
@@ -208,7 +215,7 @@ textarea { resize: vertical; }
 @media (max-width: 1200px) { .shell { grid-template-columns: 205px minmax(0, 1fr); }.page { padding: 26px 24px 0; }.topbar { padding: 12px 24px; }.board { grid-template-columns: repeat(2, minmax(0, 1fr)); }.notice-badge { display: none; }.lower-grid { grid-template-columns: 1fr; }.stat { padding: 15px; }.page-heading { align-items: flex-start; }.stats { gap: 10px; } }
 @media (max-width: 900px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }.page-heading { display: block; }.heading-actions { margin-top: 18px; justify-content: flex-start; }.agent-grid { grid-template-columns: 1fr; } }
 @media (max-width: 700px) {
-  .shell { display: block; min-height: 0; }.sidebar { padding: 16px; border-right: 0; border-bottom: 1px solid var(--line); }.brand { font-size: 26px; padding: 0; }.brand-mark { width: 30px; height: 33px; font-size: 21px; }
+  .shell { display: block; min-height: 0; }.sidebar { padding: 16px; border-right: 0; border-bottom: 1px solid var(--line); }.brand { padding: 0; }.brand-mark,.brand-mark svg { width: 36px; height: 36px; }.brand-mark { flex-basis: 36px; }.brand-name { font-size: 20px; }
   .workspace-tag, .sidebar > .nav-label:first-of-type, .sidebar-bottom { display: none; }.sidebar nav { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 15px; }.nav-item { width: auto; padding: 8px 10px; font-size: 12px; margin: 0; }.nav-item.active { padding-left: 8px; }.nav-item > span:first-child { display: none; }.nav-count { display: none; }
   .project-label { margin: 16px 0 0; }.project-item { width: auto; }.project-label .icon-button { min-height: 36px; }#project-list { display: flex; flex-wrap: wrap; gap: 5px; }
   .topbar { padding: 10px 16px; }.local-chip { display: none; }.page { padding: 22px 16px 0; }h1 { font-size: 28px; }.notice { align-items: flex-start; padding: 12px; }.notice-icon { display: none; }.column { padding: 10px; }.task-card { padding: 12px; }.board { gap: 10px; }.section-title { align-items: flex-start; }.section-title h2 small { display: block; margin: 4px 0 0; }
