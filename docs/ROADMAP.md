@@ -35,7 +35,7 @@ UI แสดงงาน สถานะ backend ผลลัพธ์/diff ส�
 Local helper สรุป context/วิเคราะห์ log เท่านั้น ไม่มี write/exec tools
 Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านกับ `fake-agent` พร้อม evidence
 
-### Phase 1 evidence (`python3 -m pytest`, 56 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
+### Phase 1 evidence (`python3 -m pytest`, 58 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
 
 | Scenario (MVP_CONTRACT §8) | Evidence | สถานะ |
 | --- | --- | --- |
@@ -50,8 +50,8 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 | Scope overlap / duplicate | `test_overlapping_scopes_never_run_together`, `test_duplicate_task_is_not_queued` | ผ่าน |
 | Local/remote boundary | `tests/test_server.py` (401/403, Origin, loopback only) | ผ่าน |
 | UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
-| Stale context | invalidate เมื่อ commit/instruction เปลี่ยน | ยังไม่มี test |
-| Unknown outcome | crash หลัง side effect ก่อนบันทึกผล → reconciliation | ยังไม่มี: `recover()` requeue อัตโนมัติ (ปลอดภัยเพราะ attempt ทำงานใน clone แยก และ fetch เป็น ref เดิมซ้ำได้ แต่ยังไม่ได้พิสูจน์ด้วย test) |
+| Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry); commit เปลี่ยนยังไม่มี test | บางส่วน |
+| Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
 | Local helper | summarize/log analysis แบบไม่มี write/exec | ยังไม่ implement |
 | Two-agent collaboration | — | Phase 2 |
 | cgroup MemoryMax | `probes/boundary.sh` ยืนยันค่าที่ตั้ง; ยังไม่มี test ว่า OOM ถูกฆ่าและ task ไม่ค้าง | บางส่วน |

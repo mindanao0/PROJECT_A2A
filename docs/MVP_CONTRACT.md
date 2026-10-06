@@ -131,7 +131,7 @@ Cancel task ต้อง propagate ไป dependent/child work ตาม policy 
 | Local helper | สรุปพร้อม source refs/วิเคราะห์ log ได้ โดยไม่มี write/exec tools หรือ credentials |
 | Stop/Kill | หยุดงานที่มี child command ได้ตามนิยาม; ไม่มี process ที่ยังเขียน workspace หลังยืนยัน stopped |
 | Crash/restart | กู้ task/attempt ได้ ไม่ duplicate worker และไม่ replay side effects |
-| Unknown outcome | crash หลัง side effect ก่อนบันทึกผลแล้วเข้าสู่ reconciliation ไม่ retry อัตโนมัติ |
+| Unknown outcome | crash หลัง side effect ก่อนบันทึกผล: Phase 1 requeue ได้ เพราะ side effect นอก attempt clone จำกัดที่ `refs/navis/attempts/<id>` ซึ่งเขียนซ้ำได้ ไม่ replay และไม่มี duplicate worker; เมื่อเพิ่ม effect ภายนอก (push/merge) ต้องเข้า reconciliation ไม่ retry อัตโนมัติ |
 | Approval race | approval ของ payload/attempt เก่าใช้กับงานใหม่ไม่ได้ |
 | Two-agent collaboration | workspace/resource แยก; reviewer ตรวจ version ที่ถูกต้อง; integration tests ตรวจ final commit |
 | Stale context/result | เปลี่ยน commit/instruction แล้ว invalidate context/evidence และปฏิเสธ late result |

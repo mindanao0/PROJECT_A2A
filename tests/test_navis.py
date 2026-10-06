@@ -278,6 +278,36 @@ class Safety(NavisTest):
         self.assertIn("stale-result-dropped", kinds)
         runtime.stop_task(self.store, tid)
 
+    def test_crash_after_fetch_before_recording_is_rerun_once(self):
+        tid = self.add(edit("src/x.py") + DONE)
+        self.rt._finish = lambda *a, **k: None  # the runner dies after the result was fetched
+        self.rt.tick()
+        for th in self.rt.threads:
+            th.join(30)
+        self.assertTrue(self.git("rev-parse", "--verify", f"refs/navis/attempts/{tid}-1").strip())
+        self.assertEqual(self.task(tid)["status"], "RUNNING")
+        rt = runtime.Runtime(self.store)  # the next runner
+        rt.recover()
+        self.assertEqual(self.task(tid)["status"], "QUEUED")
+        self.assertTrue(rt.run_until_idle(60))
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+        self.assertEqual(self.outcomes(tid), ["interrupted", "done"])
+        self.assertEqual(self.store.q("select 1 from attempts where status = 'running'"), [])
+        self.assertNotIn("x.py", self.git("ls-files"))  # the project checkout was never touched
+
+    def test_instruction_during_an_attempt_discards_its_result(self):
+        tid = self.add(step("sleep", s=2, attempt=1) + step("prompt", path="src/prompt.txt", attempt=2) + DONE)
+        self.rt.tick()
+        self.wait(lambda: (self.tmp / "home" / "attempts" / f"{tid}-1" / "agent.log").exists())
+        self.assertTrue(runtime.instruct(self.store, tid, "use blue"))
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+        self.assertEqual(self.outcomes(tid), ["done", "done"])  # attempt 1 finished, but its result was not accepted
+        self.assertIn("User instruction: use blue", self.shown(f"{tid}-2", "src/prompt.txt"))
+        self.assertEqual(self.task(tid)["attempts"], 0)  # no retry spent
+        self.assertIn("instruction changed", " ".join(
+            r["data"] for r in self.store.q("select data from events where task = ? and kind = 'status'", tid)))
+
 
 class Adapters(unittest.TestCase):
     @unittest.skipUnless(shutil.which("codex"), "codex not installed")

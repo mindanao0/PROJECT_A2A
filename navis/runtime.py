@@ -450,6 +450,9 @@ class Runtime:
                    note=f"{t['agent']} quota; retry after {time.strftime('%H:%M:%S', time.localtime(until))}")
         elif outcome == "crashed":
             self._retry(t, head, "agent process crashed")
+        elif s.one("select context from tasks where id = ?", tid)["context"] != t["context"]:
+            # The result answers a prompt the user has since changed (MVP_CONTRACT: stale context).
+            s.move(tid, "QUEUED", R, head=head, note="instruction changed during the attempt; rerunning")
         else:
             self._verify(t, aid, adir, proj, ro, head, summary)
         if outcome != "leak":
