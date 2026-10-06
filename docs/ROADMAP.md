@@ -63,6 +63,12 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 เก็บ compatibility matrix พร้อมเวอร์ชัน, test commands และ evidence; capability ที่ไม่ผ่านให้ unsupported/limited ไม่จำลองว่ารองรับ
 Exit: adapter จริงผ่าน acceptance scenarios ชุดเดียวกับ fake
 
+### Phase 1b status (2026-10-06; codex-cli 0.160.1, claude 2.1.291)
+
+ผ่าน: single-agent coding กับ Codex และ Claude จริงผ่าน Runner (`python3 probes/adapter.py codex|claude`), tool list ของ Claude ไม่มี Bash, resume ของ Codex หลัง kill -9
+เจอจาก probe: `codex exec` ต้อง pre-approve MCP tools; Claude ต้องใช้ `--tools` เพื่อ default-deny; Claude session หายถ้า kill ก่อนบันทึก (Runner ไม่พึ่ง session ของ provider)
+ยังไม่ผ่าน/ไม่ได้ทดสอบ: scenario อื่นของ §8 (boundary escape, stop/kill, crash/restart, quota) กับ CLI จริง, ข้อความ rate limit จริง (ไม่เผา quota เพื่อทดสอบ), local backend ใน matrix มีเฉพาะ summarize ไม่ใช่ coding
+
 ## Phase 2 — Two-agent collaboration and integration
 
 เพิ่ม proposal/critique/delegate/review, task dependencies และ bounded conversation rounds

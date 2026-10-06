@@ -6,6 +6,7 @@ Needs a prior login into the isolated agent home (docs/EXECUTION_DESIGN.md §3).
 short /tmp dir (the MCP socket path must stay under 108 characters) and the agent home is
 symlinked, never copied. Prints status, events and the end of agent.log as evidence."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -44,6 +45,12 @@ print(f"{agent}: {t['status']} in {time.time() - t0:.0f}s | {t['note']}")
 for e in s.q("select attempt, kind, data from events where task = ? order by id", tid):
     print(" ", e["attempt"], e["kind"], e["data"][:240])
 log = work / "home/attempts" / f"{tid}-1" / "agent.log"
+if agent == "claude" and log.exists():  # §10 probe 2: the init event lists the tools the agent really has
+    for line in log.read_text().splitlines():
+        if '"subtype":"init"' in line:
+            tools = json.loads(line)["tools"]
+            print("init tools:", ", ".join(tools), "| Bash present:", "Bash" in tools)
+            break
 print("--- agent.log tail\n" + (log.read_bytes()[-2500:].decode(errors="replace") if log.exists() else "(none)"))
 shutil.rmtree(work, ignore_errors=True)
 sys.exit(t["status"] != "COMPLETED")

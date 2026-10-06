@@ -130,6 +130,7 @@ def claude_cmd(prompt, mcp, home, io):
     cfg.write_text(json.dumps({"mcpServers": {"navis": {"command": mcp[0], "args": mcp[1:]}}}))
     argv = [str(exe), "-p", prompt, "--output-format", "stream-json", "--verbose",
             "--mcp-config", str(cfg), "--strict-mcp-config", "--permission-mode", "acceptEdits",
+            "--tools", "Read,Edit,Write,Glob,Grep",  # default-deny: the built-in set also has Cron/RemoteTrigger/...
             "--allowedTools", "Read,Edit,Write,Glob,Grep,mcp__navis",
             "--disallowedTools", "Bash,WebFetch,WebSearch,Task"]
     return argv, {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]

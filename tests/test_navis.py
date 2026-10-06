@@ -356,6 +356,7 @@ class Adapters(unittest.TestCase):
             argv, env, _ = runtime.claude_cmd("p", ["py", "mcp.py", "s"], Path("/h"), Path(io))
         self.assertIn("Bash,WebFetch,WebSearch,Task", argv)
         self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Edit,Write,Glob,Grep")
         self.assertEqual(env, {"CLAUDE_CONFIG_DIR": "/h"})
 
 
