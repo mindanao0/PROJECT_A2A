@@ -157,7 +157,7 @@ ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd, "local":
 # User commands
 
 def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", source=None, kind="", target=None,
-             after=None, parent=None, round=0):
+             after=None, parent=None, round=0, checks=None):
     """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
@@ -167,17 +167,22 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", sourc
     scope = norm_scope(scope)
     sha = subprocess.run(["git", "-C", proj["path"], "rev-parse", "--verify", f"{base}^{{commit}}"],
                          capture_output=True, text=True, check=True).stdout.strip()
+    if checks is not None:  # a task may be verified by a subset of the project's checks (integration still runs all)
+        unknown = [c for c in checks if c not in proj["checks"]]
+        if unknown or not checks:
+            raise ValueError(f"unknown check(s) {', '.join(unknown) or '(none given)'}; available: {', '.join(proj['checks']) or 'none'}")
     if after is not None:  # starts from that task's result once it is COMPLETED
         dep = store.one("select project, kind from tasks where id = ?", after)
         if not dep or dep["project"] != project or dep["kind"] == "review":
             raise ValueError("after must be an implementation task in the same project")
-    key, now = task_key(project, spec, scope, f"{sha}+after{after}" if after is not None else sha), time.time()
+    salt = (f"+after{after}" if after is not None else "") + (f"+checks{','.join(checks)}" if checks else "")
+    key, now = task_key(project, spec, scope, sha + salt), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round)"
-                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?)",
+        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks)"
+                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?)",
                          project, agent, spec, title or spec.strip().splitlines()[0][:80],
                          json.dumps(source) if source else "", json.dumps(scope), key, sha, now, now, kind, target,
-                         after, parent, round)
+                         after, parent, round, json.dumps(checks) if checks else None)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -603,7 +608,7 @@ class Runtime:
 
     def _verify(self, t, aid, adir, proj, ro, head, summary):
         failures = []
-        for name in proj["checks"]:
+        for name in (json.loads(t["checks"]) if t["checks"] else proj["checks"]):
             rc, tail = self._check(aid, adir / "repo", proj, ro, name)
             self.store.log(t["id"], aid, "check", name=name, rc=rc, head=head, tail=self.redact(tail))
             if rc:
@@ -755,7 +760,8 @@ class Runtime:
                 if overlaps(scope, json.loads(r["scope"])) and str(r["id"]) != src]
         lines = [f"Navis task {t['id']}, attempt {n}. Work only inside the current directory.",
                  f"Edit only files under: {', '.join(scope)}.",
-                 f"Checks you can run with the run_check tool: {', '.join(proj['checks']) or 'none'}.",
+                 f"Checks you can run with the run_check tool: {', '.join(proj['checks']) or 'none'}."
+                 + (f" Your result is verified by: {', '.join(json.loads(t['checks']))}; the others belong to parallel work." if t["checks"] else ""),
                  'When finished, call report_result with status "done" or "failed" and a short summary.',
                  "If you need a decision from the user, call ask_user and then stop."]
         if t["parent"] is None:

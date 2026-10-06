@@ -39,6 +39,8 @@ def main(argv=None):
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
     a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
+    a.add_argument("--check", action="append", dest="checks", metavar="NAME",
+                   help="verify this task with only these project checks (repeatable); integration still runs all")
     a.add_argument("spec", help="task text, or - to read it from stdin")
     sub.add_parser("ls", help="list tasks")
     sub.add_parser("run", help="run the scheduler (one per machine)")
@@ -64,6 +66,7 @@ def main(argv=None):
     g = sub.add_parser("gc", help="delete old attempt directories of finished tasks")
     g.add_argument("--days", type=int, help="default: [limits] retention_days (30)")
     g.add_argument("--dry-run", action="store_true")
+    sub.add_parser("verify-integration", help="run every check on a project's integration commit").add_argument("project")
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -75,7 +78,8 @@ def main(argv=None):
     if args.cmd == "add":
         spec = sys.stdin.read() if args.spec == "-" else args.spec
         try:
-            tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after)
+            tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after,
+                                          checks=args.checks)
         except ValueError as e:
             sys.exit(str(e))
         if dup:
@@ -141,6 +145,11 @@ def main(argv=None):
         r = retention.gc(store, args.days, args.dry_run)
         print(f"{'would remove' if r['dry_run'] else 'removed'} {r['attempt_dirs']} attempt directories "
               f"({r['bytes'] / 1e6:.1f} MB) older than {r['days']} days")
+    elif args.cmd == "verify-integration":
+        try:
+            print(f"all checks passed at {integrate.verify(runtime.Runtime(store), args.project)[:10]}")
+        except integrate.IntegrationError as e:
+            sys.exit(f"not verified: {e}")
     elif args.cmd == "integration":
         st = integrate.status(store, args.project)
         print(f"branch {st['branch'] or '(detached)'} @ {st['head'][:10]}; integration @ {(st['commit'] or 'none')[:10]}")

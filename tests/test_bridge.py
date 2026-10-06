@@ -311,6 +311,23 @@ class Runtime(BridgeTest):
         with self.assertRaisesRegex(ControlError, "Unknown project"):
             self.b.command({"action": "discard_integration", "project_id": "nope"})
 
+    def test_verify_integration_runs_every_check_from_the_gui(self):
+        self.project({"a": "test -f src/a/a.py", "b": "test -f src/b/b.py"})
+        a, _ = runtime.add_task(self.store, "p", "fake", edit("src/a/a.py") + DONE, ["src/a"], checks=["a"])
+        b, _ = runtime.add_task(self.store, "p", "fake", edit("src/b/b.py") + DONE, ["src/b"], checks=["b"])
+        self.pump(lambda s: self.task(s, str(a))["state"] == "COMPLETED" and self.task(s, str(b))["state"] == "COMPLETED")
+        self.cmd(str(a), "integrate")
+        self.pump(lambda s: any(i["tasks"] == [a] and not i["busy"] for i in s["integration"]))
+        self.cmd(str(b), "integrate")
+        snap = self.pump(lambda s: any(i["tasks"] == [a, b] and not i["busy"] for i in s["integration"]))
+        (i,) = snap["integration"]
+        self.assertEqual((i["verify_needed"], i["can_promote"]), (True, False))
+        self.b.command({"action": "verify_integration", "project_id": "p"})
+        snap = self.pump(lambda s: any(x["can_promote"] for x in s["integration"]))
+        self.assertFalse(snap["integration"][0]["verify_needed"])
+        with self.assertRaisesRegex(ControlError, "Unknown project"):
+            self.b.command({"action": "verify_integration", "project_id": "nope"})
+
 
 class Http(BridgeTest):
     def test_server_drives_the_real_runtime(self):

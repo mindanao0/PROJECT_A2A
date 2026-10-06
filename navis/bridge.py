@@ -326,6 +326,10 @@ class Bridge:
             return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
+        if action == "verify_integration":
+            if p.get("project_id") not in {x["id"] for x in self.projects()}:
+                raise ControlError("Unknown project")
+            return self.start_verify(p["project_id"])
         if action in ("review_integration", "discard_integration"):
             if p.get("project_id") not in {x["id"] for x in self.projects()}:
                 raise ControlError("Unknown project")
@@ -416,6 +420,26 @@ class Bridge:
 
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "message": "Integrating; checks run on the merged commit. Watch the activity log."}
+
+    def start_verify(self, project):
+        with self.lock:
+            if project in self.integrating:
+                raise ControlError("An integration is already running for this project")
+            self.integrating[project] = "verify"
+
+        def work():
+            try:
+                integrate.verify(self.rt, project)
+            except integrate.IntegrationError:
+                pass  # recorded as an event the GUI shows
+            except Exception as e:
+                self.store.log(None, None, "integrate-error", error=f"unexpected: {e!r}"[:300])
+            finally:
+                with self.lock:
+                    self.integrating.pop(project, None)
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "message": "Running every check on the integration commit. Watch the activity log."}
 
     def hand_off(self, t, aid, agent):
         if t["status"] != "COMPLETED" or not t["head"]:

@@ -214,3 +214,69 @@ class Rollback(NavisTest):
         with self.assertRaisesRegex(integrate.IntegrationError, "no integration branch"):
             integrate.discard(self.store, "p")
         self.assertEqual(integrate.integrate(self.rt, tid), tip)
+
+
+class TaskChecks(NavisTest):
+    def setUp(self):
+        super().setUp()
+        self.project({"a": "test -f src/a/a.py", "b": "test -f src/b/b.py"})  # each half needs only its own file
+
+    def add_with(self, path, scope, checks):
+        tid, dup = runtime.add_task(self.store, "p", "fake", edit(path) + DONE, [scope], checks=checks)
+        self.assertIsNone(dup)
+        return tid
+
+    def halves(self):
+        a, b = self.add_with("src/a/a.py", "src/a", ["a"]), self.add_with("src/b/b.py", "src/b", ["b"])
+        self.run_all()
+        self.assertEqual((self.task(a)["status"], self.task(b)["status"]), ("COMPLETED", "COMPLETED"), self.task(a)["note"])
+        return a, b
+
+    def test_parallel_halves_integrate_one_by_one_and_promote_waits_for_every_check(self):
+        a, b = self.halves()
+        ran = {(r["task"], json.loads(r["data"])["name"]) for r in self.store.q("select task, data from events where kind = 'check'")}
+        self.assertEqual(ran, {(a, "a"), (b, "b")})  # nothing ran on the wrong half
+        integrate.integrate(self.rt, a)  # with a's own check only: the whole project could never pass with one half
+        tip = integrate.integrate(self.rt, b)
+        st = integrate.status(self.store, "p")
+        self.assertEqual((st["can_promote"], st["verify_needed"], st["tasks"]), (False, True, [a, b]))
+        self.assertIn("missing: a", st["reason"])
+        with self.assertRaisesRegex(integrate.IntegrationError, "not every check has run"):
+            integrate.promote(self.store, "p")
+        self.assertEqual(integrate.verify(self.rt, "p"), tip)  # every check, on the merged commit
+        st = integrate.status(self.store, "p")
+        self.assertEqual((st["can_promote"], [c["name"] for c in st["checks"]]), (True, ["a", "b"]))
+        self.assertEqual(integrate.promote(self.store, "p"), tip)
+
+    def test_verify_fails_when_the_halves_do_not_fit_together_and_promote_stays_blocked(self):
+        self.project({"a": "test -f src/a/a.py", "b": "test -f src/b/b.py", "fit": "test ! -e src/a/a.py -o ! -e src/b/b.py"})
+        a, b = self.halves()
+        integrate.integrate(self.rt, a)
+        integrate.integrate(self.rt, b)
+        with self.assertRaisesRegex(integrate.IntegrationError, "checks failed on the integration commit: fit"):
+            integrate.verify(self.rt, "p")
+        st = integrate.status(self.store, "p")
+        self.assertEqual((st["can_promote"], st["verify_needed"]), (False, True))
+        with self.assertRaises(integrate.IntegrationError):
+            integrate.promote(self.store, "p")
+
+    def test_a_task_without_a_check_subset_still_integrates_with_every_check(self):
+        tid = self.add(edit("src/a/a.py") + DONE, scope=["src/a"])  # no subset: the whole project must pass
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "FAILED")  # its clone has no b.py: check b fails, as before
+
+    def test_a_task_without_the_files_for_its_checks_still_fails(self):
+        tid, _ = runtime.add_task(self.store, "p", "fake", edit("src/a/other.py") + DONE, ["src/a"], checks=["a"])
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "FAILED")  # its own check is not skipped
+
+    def test_unknown_or_empty_check_lists_are_refused(self):
+        for bad in (["nope"], []):
+            with self.assertRaises(ValueError):
+                runtime.add_task(self.store, "p", "fake", DONE, ["src"], checks=bad)
+
+    def test_the_prompt_names_the_checks_that_verify_the_task(self):
+        a = self.add_with("src/a/a.py", "src/a", ["a"])
+        self.run_all()
+        prompt = (self.tmp / "home" / "attempts" / f"{a}-1" / "prompt.txt").read_text()
+        self.assertIn("Your result is verified by: a; the others belong to parallel work.", prompt)
