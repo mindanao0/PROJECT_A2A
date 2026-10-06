@@ -19,13 +19,14 @@
 | D-011 | ชื่อโปรเจกต์คือ Navis | repo/folder ชื่อ `PROJECT_NAVIS`; CLI, config dir, refs และ systemd units ใช้ `navis` |
 | D-012 | Core เขียนด้วย Python | Python ≥ 3.11 (ตรงกับ VELA) ใช้ stdlib ก่อน |
 | D-013 | สร้างและทดสอบกับ `fake-agent` ให้เสร็จก่อนใช้ CLI จริง | probes ที่ใช้ quota (Execution Design §10) เลื่อนไปหลัง Runtime ผ่าน acceptance scenarios กับ fake แล้ว |
+| D-014 | Merge: ผู้ใช้สั่ง, Runtime รวมงานบน integration branch ของ Navis | Runtime rebase/merge ผลของ task บน `refs/navis/integration/<project>` แล้วรัน check ซ้ำบน commit สุดท้าย; ผู้ใช้ fast-forward เข้า branch ของตัวเองเอง (CLI ก่อน, GUI ภายหลัง) Runtime ไม่แตะ branch หรือ working tree ของผู้ใช้ และไม่มี auto-merge ใน MVP (OD-008) |
 
 ## ข้อเสนอที่ยังไม่ได้ล็อก
 
 - เริ่ม Local LLM backend เพียงหนึ่งตัว และเลือกหลัง Phase 0
 - ทดลอง Codex app-server / Claude Code structured CLI interfaces ก่อน PTY
 - UI เล็กในช่วง runtime skeleton; Web UI เป็นข้อเสนอ ไม่ใช่คำตัดสินเรื่อง framework
-- ผู้ใช้เป็นผู้สั่ง push/merge/deploy ช่วงแรก; local commit ใน clone ของ attempt ยืนยันแล้วใน D-010 ส่วน merge policy ยังอยู่ใน OD-008
+- ผู้ใช้เป็นผู้สั่ง push/merge/deploy ช่วงแรก; local commit ใน clone ของ attempt ยืนยันแล้วใน D-010 ส่วนการรวมงานยืนยันแล้วใน D-014
 - เป้าหมายเดิมคือไม่บังคับ cloud API-key workflow; การเรียก local endpoint และ structured CLI protocol ยังใช้ได้ตาม draft เดิม หากต้องการห้าม interface เหล่านี้ด้วยต้องตัดสินแยก
 
 คำตัดสินข้างต้นไม่ได้ยืนยัน UI framework, transport, database, sandbox technology หรือความสามารถจริงของ backend ใด
