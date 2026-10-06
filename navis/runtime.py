@@ -91,8 +91,9 @@ def overlaps(a, b):
     return any(under(x, y) or under(y, x) for x in a for y in b)
 
 
-def task_key(project, spec, scope):
-    text = "\0".join([project, " ".join(spec.split()), ",".join(scope)])
+def task_key(project, spec, scope, base=""):
+    """Same project, text, scope and starting commit = the same work (D-008)."""
+    text = "\0".join([project, " ".join(spec.split()), ",".join(scope), base])
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -136,7 +137,7 @@ ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd}
 
 # User commands
 
-def add_task(store, project, agent, spec, scope=(), base="HEAD", title=""):
+def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", source=None):
     """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
@@ -144,12 +145,12 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title=""):
     scope = norm_scope(scope)
     sha = subprocess.run(["git", "-C", proj["path"], "rev-parse", "--verify", f"{base}^{{commit}}"],
                          capture_output=True, text=True, check=True).stdout.strip()
-    key, now = task_key(project, spec, scope), time.time()
+    key, now = task_key(project, spec, scope, sha), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, title, scope, key, base, status, created, updated)"
-                         " values (?,?,?,?,?,?,?,'QUEUED',?,?)",
+        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated)"
+                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?)",
                          project, agent, spec, title or spec.strip().splitlines()[0][:80],
-                         json.dumps(scope), key, sha, now, now)
+                         json.dumps(source) if source else "", json.dumps(scope), key, sha, now, now)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -303,10 +304,12 @@ class Runtime:
             self._attempt(tid)
         except Exception as e:
             a = self.store.one("select * from attempts where task = ? and status = 'running'", tid)
-            if a:
-                sandbox.stop_unit(a["unit"])
-                self.store.x("update attempts set status = 'ended', outcome = 'error', ended = ?"
-                             " where id = ? and status = 'running'", time.time(), a["id"])
+            if not a:  # recovery already revoked this attempt: its failure is just a stale result
+                self.store.log(tid, None, "stale-result-dropped", error=repr(e))
+                return
+            sandbox.stop_unit(a["unit"])
+            self.store.x("update attempts set status = 'ended', outcome = 'error', ended = ?"
+                         " where id = ? and status = 'running'", time.time(), a["id"])
             self.store.log(tid, None, "error", error=repr(e))
             self.store.move(tid, "FAILED", ("RUNNING",), note=f"runtime error: {e}"[:500])
 
@@ -345,7 +348,9 @@ class Runtime:
         sock = io / "navis.sock"
         srv = self._serve(t, aid, proj, repo, ro, sock, state)
         mcp = [sandbox.PY, str(sandbox.PKG / "mcp.py"), str(sock)]
-        argv, env, extra_ro = ADAPTERS[t["agent"]](self._prompt(t, n, proj), mcp, home, io)
+        prompt = self._prompt(t, n, proj)
+        (adir / "prompt.txt").write_text(prompt)  # shown in the GUI; outside io, so the agent cannot read it
+        argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io)
         env["NAVIS_ATTEMPT"] = str(n)
         # io (socket, MCP config) is read-only: connect() still works, replacing them does not.
         box = sandbox.bwrap(repo, rw=[repo, home], ro=[*ro, str(io), *extra_ro], env=env)

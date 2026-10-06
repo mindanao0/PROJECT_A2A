@@ -6,6 +6,7 @@ import json
 import mimetypes
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie, CookieError
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -20,8 +21,10 @@ class ControlServer(ThreadingHTTPServer):
     def __init__(self, runtime, port=0, token=None):
         self.runtime = runtime
         self.token = token or secrets.token_urlsafe(32)
+        self.session_token = secrets.token_urlsafe(32)
         super().__init__(("127.0.0.1", port), Handler)
         self.origin = f"http://127.0.0.1:{self.server_port}"
+        self.session_cookie = f"navis_session_{self.server_port}"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -29,7 +32,7 @@ class Handler(BaseHTTPRequestHandler):
         # No request URLs, fragments, tokens, or user content in access logs.
         pass
 
-    def reply(self, status, content, kind="application/json; charset=utf-8"):
+    def reply(self, status, content, kind="application/json; charset=utf-8", extra_headers=None):
         if not isinstance(content, bytes):
             content = json.dumps(content, ensure_ascii=False).encode()
         self.send_response(status)
@@ -38,6 +41,8 @@ class Handler(BaseHTTPRequestHandler):
             "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         }.items():
+            self.send_header(name, value)
+        for name, value in (extra_headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(content)
@@ -52,7 +57,15 @@ class Handler(BaseHTTPRequestHandler):
             return False
         if api:
             auth = self.headers.get("Authorization", "")
-            if not hmac.compare_digest(auth.encode("utf-8"), ("Bearer " + self.server.token).encode("utf-8")):
+            authorized = hmac.compare_digest(auth.encode("utf-8"), ("Bearer " + self.server.token).encode("utf-8"))
+            if not auth:
+                try:
+                    cookie = SimpleCookie(self.headers.get("Cookie", ""))
+                    value = cookie[self.server.session_cookie].value if self.server.session_cookie in cookie else ""
+                    authorized = hmac.compare_digest(value.encode(), self.server.session_token.encode())
+                except CookieError:
+                    authorized = False
+            if not authorized:
                 self.reply(401, {"error": "Open the local launch link to authenticate"})
                 return False
         return True
@@ -82,6 +95,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self.boundary(api=True, mutation=True):
+            return
+        if self.path == "/api/session":
+            # Only the launch capability can establish a browser session.
+            if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), ("Bearer " + self.server.token).encode()):
+                self.reply(401, {"error": "Open the launch link to establish a session"})
+                return
+            self.reply(200, {"ok": True}, extra_headers={"Set-Cookie": f"{self.server.session_cookie}={self.server.session_token}; HttpOnly; SameSite=Strict; Path=/api/"})
             return
         if self.path != "/api/command":
             self.reply(404, {"error": "Not found"})

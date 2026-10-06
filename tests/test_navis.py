@@ -267,8 +267,8 @@ class Safety(NavisTest):
     def test_runner_restart_requeues_and_rejects_stale_result(self):
         tid = self.add(step("hang"))
         self.rt.tick()  # the old runner starts the attempt, then stops scheduling ("crashes")
-        self.wait(lambda: self.store.one("select 1 from attempts where task = ? and status = 'running'", tid))
-        time.sleep(0.5)
+        self.wait(lambda: (self.tmp / "home" / "attempts" / f"{tid}-1" / "agent.log").exists())  # agent started
+        time.sleep(0.3)
         runtime.Runtime(self.store).recover()  # a new runner after the crash
         for th in self.rt.threads:
             th.join(30)  # the old attempt thread still reports in, too late

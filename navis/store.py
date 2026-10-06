@@ -7,7 +7,7 @@ import time
 SCHEMA = """
 create table if not exists tasks(
   id integer primary key, project text not null, agent text not null, spec text not null,
-  title text not null default '',
+  title text not null default '', source text not null default '',
   scope text not null, key text not null, base text not null, head text,
   status text not null, attempts integer not null default 0,
   note text not null default '', context text not null default '',

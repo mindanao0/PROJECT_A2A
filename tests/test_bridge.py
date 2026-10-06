@@ -47,21 +47,68 @@ class BridgeTest(NavisTest):
 
 class Snapshot(BridgeTest):
     def test_completed_task_shows_evidence_and_events(self):
-        tid = self.create(edit("src/new.py", "print(1)") + DONE)
+        tid = self.create(edit("src/new.py", "print(1)\n") + DONE)
         snap = self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
         t = self.task(snap, tid)
         self.assertEqual(snap["mode"], "real")
         self.assertEqual([p["id"] for p in snap["projects"]], ["p"])
-        names = [a["name"] for a in t["artifacts"]]
-        self.assertIn("check ok", names)
-        self.assertIn("Changes (git diff --stat)", names)
-        self.assertIn("src/new.py", next(a for a in t["artifacts"] if a["kind"] == "result")["content"])
-        self.assertEqual(len(t["attempts"]), 1)
+        kinds = {a["kind"]: a for a in t["artifacts"]}
+        self.assertEqual(set(kinds), {"verification", "diff", "agent_log", "prompt"})
+        self.assertIn("+print(1)", kinds["diff"]["content"])
+        self.assertEqual(kinds["diff"]["files"], [{"path": "src/new.py", "out_of_scope": False, "protected": False}])
+        self.assertEqual(kinds["diff"]["hash"], t["head"])
+        self.assertIn("report_result", kinds["agent_log"]["content"])
+        self.assertIn(f"Navis task {tid}, attempt 1", kinds["prompt"]["content"])
+        self.assertEqual(t["result_ref"], f"refs/navis/attempts/{tid}-1")
+        self.assertEqual(snap["resources"]["slots"][0], {"backend": "fake", "used": 0, "limit": 2})
         types = [e["type"] for e in snap["events"]]
         self.assertTrue({"STATE", "ATTEMPT", "TOOL", "CHECK", "OUTCOME"} <= set(types), types)
+        self.assertTrue(any(e.get("output") is not None for e in snap["events"] if e["type"] == "CHECK"))
         again = self.b.snapshot(snap["cursor"])
         self.assertEqual(again["events"], [])
         self.assertEqual(again["cursor"], snap["cursor"])
+
+    def test_diff_flags_out_of_scope_and_protected_files(self):
+        tid = self.create(edit("docs/b.md") + edit("tests/t.sh") + edit("src/ok.py") + DONE)
+        snap = self.pump(lambda s: self.task(s, tid)["state"] == "REVIEW")
+        diff = next(a for a in self.task(snap, tid)["artifacts"] if a["kind"] == "diff")
+        flags = {f["path"]: (f["out_of_scope"], f["protected"]) for f in diff["files"]}
+        self.assertEqual(flags, {"docs/b.md": (True, False), "tests/t.sh": (True, True), "src/ok.py": (False, False)})
+
+    def test_queue_reasons_explain_the_wait(self):
+        hold = self.create(step("hang"))
+        self.pump(lambda s: self.task(s, hold)["state"] == "RUNNING")
+        overlap = self.create(DONE, scope="src/sub")
+        other = self.create(DONE + "# o\n", scope="docs")
+        self.b.command({"action": "pause"})
+        snap = self.b.snapshot()
+        codes = lambda tid: [r["code"] for r in self.task(snap, tid)["queue_reasons"]]
+        self.assertEqual(codes(overlap), ["paused", "scope"])
+        self.assertEqual(self.task(snap, overlap)["queue_reasons"][1]["task_id"], hold)
+        self.assertEqual(codes(other), ["paused"])
+        self.b.command({"action": "resume"})
+        self.assertEqual([r["code"] for r in self.task(self.b.snapshot(), other)["queue_reasons"]], ["ready"])
+        self.cmd(hold, "kill")
+
+    def test_continue_from_a_completed_task_starts_at_its_result(self):
+        first = self.create(edit("src/one.py") + DONE)
+        snap = self.pump(lambda s: self.task(s, first)["state"] == "COMPLETED")
+        t = self.task(snap, first)
+        base = {"action": "create_task", "project_id": "p", "title": "review", "spec": "review it", "scope": "src",
+                "agent": "fake", "source_task_id": first}
+        with self.assertRaises(ControlError):
+            self.b.command({**base, "source_attempt_id": "stale"})
+        second = self.b.command({**base, "source_attempt_id": t["attempt_id"]})["task_id"]
+        snap = self.pump(lambda s: self.task(s, second)["state"] in ("COMPLETED", "REVIEW", "FAILED"))
+        self.assertEqual(self.task(snap, second)["source"]["task_id"], first)
+        self.assertEqual(self.shown(f"{second}-1", "src/one.py"), "x\n")  # sees the first task's file
+        with self.assertRaises(ControlError):  # no such task
+            self.b.command({**base, "source_task_id": "999", "source_attempt_id": "x", "spec": "other"})
+        running = self.create(step("hang"), scope="docs")
+        self.pump(lambda s: self.task(s, running)["state"] == "RUNNING")
+        with self.assertRaises(ControlError):  # not completed
+            self.b.command({**base, "source_task_id": running, "source_attempt_id": self.task(self.b.snapshot(), running)["attempt_id"], "spec": "third"})
+        self.cmd(running, "kill")
 
     def test_agents_report_login_state(self):
         agents = {a["name"]: a for a in self.b.snapshot()["agents"]}
