@@ -28,7 +28,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
          "leak": "LEAK", "stale-result-dropped": "STALE", "integrate": "INTEGRATE", "integrate-error": "INTEGRATE",
-         "promote": "PROMOTE"}
+         "promote": "PROMOTE", "review": "REVIEW"}
 
 
 def message(kind, d):
@@ -48,6 +48,7 @@ def message(kind, d):
                                   else f"Not integrated: checks failed on {str(d.get('commit'))[:10]}"),
             "integrate-error": lambda: f"Not integrated: {d.get('error')}",
             "promote": lambda: f"Your branch {d.get('branch')} fast-forwarded to {str(d.get('commit'))[:10]}",
+            "review": lambda: f"Review of task {d.get('target')} by {d.get('reviewer')}: {d.get('verdict')}",
             }.get(kind, lambda: kind)()
 
 
@@ -193,11 +194,16 @@ class Bridge:
         evidence, instr = {}, {}
         for e in s.q("select * from events where task is not null and kind in ('check', 'prepare', 'instruction') order by id"):
             (instr if e["kind"] == "instruction" else evidence).setdefault(e["task"], []).append(e)
+        reviews = {}
+        for e in s.q("select * from events where kind = 'review' order by id desc"):
+            d = json.loads(e["data"])
+            reviews.setdefault(d["target"], []).append({"reviewer": d["reviewer"], "implementer": d["implementer"], "verdict": d["verdict"],
+                                                        "summary": d["summary"], "commit": d["commit"], "time": e["at"], "review_task_id": str(e["task"])})
         busy = {}
         for t in rows:
             if t["status"] == "RUNNING":
                 busy[t["agent"]] = busy.get(t["agent"], 0) + 1
-        return {"now": now, "rows": rows, "attempts": attempts, "latest": latest, "evidence": evidence, "instr": instr,
+        return {"now": now, "rows": rows, "attempts": attempts, "latest": latest, "evidence": evidence, "instr": instr, "reviews": reviews,
                 "busy": busy, "cool": {r["agent"]: r["until"] for r in s.q("select * from cooldowns")},
                 "touched": {r["task"]: r["m"] for r in s.q("select task, max(at) m from events where task is not null group by task")},
                 "running": [t for t in rows if t["status"] == "RUNNING"], "paused": runtime.is_paused(s), "projects": {}}
@@ -225,6 +231,7 @@ class Bridge:
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
                        "expires": t["updated"] + 86400, "payload_hash": ""}
         return {
+            "kind": t["kind"] or "task", "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -358,6 +365,8 @@ class Bridge:
     def start_integrate(self, t):
         if t["status"] != "COMPLETED" or not t["head"]:
             raise ControlError("Only a completed task with a result can be integrated")
+        if runtime.load_project(t["project"])["require_review"] and not runtime.review_approved(self.store, t["id"], t["head"]):
+            raise ControlError("This project requires an approving review of this exact result first. Use Review with Claude.")
         with self.lock:
             if t["project"] in self.integrating:
                 raise ControlError("An integration is already running for this project")
@@ -383,10 +392,14 @@ class Bridge:
         if not self.logged_in(agent):
             raise ControlError(f"{agent} is not logged in")
         title = t["title"] or t["spec"][:60]
-        spec = (f"Review the changes from task {t['id']} ({title}). Check correctness and edge cases, fix real problems, "
-                "and report what you found." if agent == "claude" else
-                f"Continue the work from task {t['id']} ({title}): finish anything incomplete and keep to the scope.")
-        return self.create_task({"project_id": t["project"], "title": f"{'Review' if agent == 'claude' else 'Continue'}: {title}"[:120],
+        if agent == "claude":  # an independent, read-only review of this exact result
+            try:
+                rid, dup = runtime.request_review(self.store, t["id"], "claude")
+            except ValueError as e:
+                raise ControlError(str(e))
+            return {"task_id": str(dup or rid), "duplicate": bool(dup)}
+        spec = f"Continue the work from task {t['id']} ({title}): finish anything incomplete and keep to the scope."
+        return self.create_task({"project_id": t["project"], "title": f"Continue: {title}"[:120],
                                  "spec": spec, "scope": ",".join(json.loads(t["scope"])), "agent": agent,
                                  "source_task_id": str(t["id"]), "source_attempt_id": aid})
 

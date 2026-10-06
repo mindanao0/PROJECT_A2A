@@ -257,6 +257,22 @@ class Runtime(BridgeTest):
         with self.assertRaisesRegex(ControlError, "Unknown project"):
             self.b.command({"action": "promote_integration", "project_id": "nope"})
 
+    def test_review_verdict_shows_on_the_task_and_the_gate_blocks_integration(self):
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace("protected", "require_review = true\nprotected", 1))
+        tid = self.create(edit("src/x.py") + DONE)
+        self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
+        with self.assertRaisesRegex(ControlError, "requires an approving review"):
+            self.cmd(tid, "integrate")
+        rid, _ = runtime.request_review(self.store, int(tid), "fake", DONE)
+        snap = self.pump(lambda s: self.task(s, str(rid))["state"] == "COMPLETED")
+        (r,) = self.task(snap, tid)["reviews"]
+        self.assertEqual((r["verdict"], r["stale"], r["review_task_id"]), ("approve", False, str(rid)))
+        self.assertEqual((self.task(snap, str(rid))["kind"], self.task(snap, tid)["kind"]), ("review", "task"))
+        self.assertIn("Review of task", " ".join(e["message"] for e in snap["events"]))
+        self.cmd(tid, "integrate")
+        self.pump(lambda s: any(i["can_promote"] for i in s["integration"]))
+
 
 class Http(BridgeTest):
     def test_server_drives_the_real_runtime(self):

@@ -149,7 +149,8 @@ GUI เดียวกัน แต่ขับ runtime จริงผ่าน
 | Resources | slot ที่ใช้/ทั้งหมด และ `memory_bytes` ของ attempt ที่กำลังรัน อ่านจาก `memory.current` ของ cgroup |
 | Settings | แก้ slot ต่อ agent และ attempt timeout ได้ (เขียน `~/.config/navis/config.toml`; จำนวน slot ของ checks ต้อง restart) |
 | Add project | ชื่อ + path ที่เป็นรากของ Git repo; สร้าง `~/.config/navis/projects/<ชื่อ>.toml` โดย **ยังไม่มี check** ต้องเพิ่มเองในไฟล์ ไม่งั้นงานที่จบไม่ถูก verify ด้วยอะไรเลย |
-| Review with Claude / Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ agent นั้น login ใน agent home ของ Navis |
+| Review with Claude | สร้าง **review task แบบอ่านอย่างเดียว** บน commit ผลพอดี: reviewer เห็น requirement, diff ที่ไม่เปลี่ยนแปลง และผล check ของ Runtime (ไม่เห็นบันทึกของ implementer) ใช้ tool แค่ Read/Glob/Grep; ถ้า reviewer แก้ไฟล์ verdict เป็นโมฆะ; verdict (approve / changes requested) แสดงในส่วน Reviews ของงานที่ถูกรีวิว; เปิดเมื่อ claude login |
+| Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ codex login ใน agent home ของ Navis |
 | REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
 | Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
 
