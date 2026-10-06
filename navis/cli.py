@@ -5,7 +5,7 @@ import json
 import sys
 import time
 
-from . import helper, integrate, runtime
+from . import helper, integrate, retention, runtime, usage
 
 
 def show_tasks(store):
@@ -58,6 +58,12 @@ def main(argv=None):
     ri.add_argument("project")
     ri.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
     sub.add_parser("discard", help="roll back: drop a project's integration branch").add_argument("project")
+    u = sub.add_parser("usage", help="what attempts cost: time, context bytes and the tokens the CLIs exposed")
+    u.add_argument("-p", "--project")
+    u.add_argument("--hours", type=float, default=24 * 7)
+    g = sub.add_parser("gc", help="delete old attempt directories of finished tasks")
+    g.add_argument("--days", type=int, help="default: [limits] retention_days (30)")
+    g.add_argument("--dry-run", action="store_true")
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -120,6 +126,21 @@ def main(argv=None):
             print(f"discarded integration branch at {integrate.discard(store, args.project)[:10]}")
         except integrate.IntegrationError as e:
             sys.exit(str(e))
+    elif args.cmd == "usage":
+        rep = usage.report(store, time.time() - args.hours * 3600, args.project)
+        print(f"last {args.hours:g} h{' / ' + args.project if args.project else ''}")
+        print(f"{'AGENT':<7} {'KIND':<10} {'ATT':>3} {'OUTCOMES':<30} {'SECS':>6} {'PROMPT KB':>9} {'IN TOK':>9} {'CACHED':>9} {'OUT TOK':>8} {'COST $':>7}")
+        for (agent, kind), r in rep.items():
+            outcomes = ",".join(f"{k}:{v}" for k, v in sorted(r["outcomes"].items()))
+            tokens = (f"{r['input']:>9} {r['cached']:>9} {r['output']:>8} {r['cost_usd']:>7.3f}" if r["with_usage"]
+                      else f"{'-':>9} {'-':>9} {'-':>8} {'-':>7}")
+            print(f"{agent:<7} {kind:<10} {r['attempts']:>3} {outcomes:<30} {r['seconds']:>6.0f} {r['prompt_bytes'] / 1024:>9.1f} {tokens}")
+        if not rep:
+            print("no finished attempts in this window")
+    elif args.cmd == "gc":
+        r = retention.gc(store, args.days, args.dry_run)
+        print(f"{'would remove' if r['dry_run'] else 'removed'} {r['attempt_dirs']} attempt directories "
+              f"({r['bytes'] / 1e6:.1f} MB) older than {r['days']} days")
     elif args.cmd == "integration":
         st = integrate.status(store, args.project)
         print(f"branch {st['branch'] or '(detached)'} @ {st['head'][:10]}; integration @ {(st['commit'] or 'none')[:10]}")

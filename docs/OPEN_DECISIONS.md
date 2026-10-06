@@ -82,6 +82,8 @@ Default ช่วงแรกควร conservative
 
 ไม่ควรเริ่มด้วยระบบ memory ซับซ้อนเกินจำเป็น
 
+**หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Navis ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI overhead ครองส่วนใหญ่) ข้อเสนอ: ยังไม่สร้าง Context Broker; เมื่อต้องการ ให้เริ่มจาก deterministic Git/file retrieval และวัดซ้ำด้วย `navis-cli usage` กับงานจริงที่ prompt ใหญ่ — ยังไม่ใช่คำตัดสินของผู้ใช้
+
 ## OD-010 Project configuration format — PROPOSED
 
 ข้อเสนอ: TOML นอก repo ที่ `~/.config/navis/projects/<project>.toml` (ตัวอย่างใน [Execution Design](EXECUTION_DESIGN.md) §9) เพื่อไม่เพิ่มไฟล์ใน repo ของ project (D-007)
@@ -97,6 +99,8 @@ Roles เป็น:
 ## OD-012 Cost/usage accounting
 
 Cloud subscription CLI อาจไม่ expose token/cost แบบ API ต้องกำหนด fallback metric เช่น turns/time/context size
+
+วัดจริงแล้ว: Claude เปิดเผย tokens/cache/`total_cost_usd`/turns; Codex เปิดเผย tokens/cached ต่อ turn แต่ไม่มีราคา; Runtime เก็บ prompt bytes + เวลา + usage ที่มีต่อ attempt (`navis-cli usage`) ฟิลด์ที่ไม่เปิดเผยเป็น `None`
 
 ## OD-013 Prompt-injection boundary
 

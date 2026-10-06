@@ -115,6 +115,11 @@ Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wi
 ไม่ถือว่า context fingerprint เท่ากับ provider cache hit
 กำหนด retention/cleanup และ project scheduling fairness ตาม usage จริง
 
+### Phase 3 status (2026-10-06)
+
+มีแล้ว: usage accounting ต่อ attempt (`navis-cli usage`), fair scheduling ระหว่าง project ตาม usage จริง, retention (`navis-cli gc`), bounded cache และ benchmark เทียบ agent เดี่ยวกับ implement → review (`probes/bench.py`) — ผลและข้อจำกัดอยู่ใน [Phase 3 measurements](PHASE3.md)
+ผลหลัก: ในงานเล็ก 3 งานทุก config ได้คะแนนเต็ม (วัดคุณภาพไม่แยก), pipeline ใช้เวลา ~4× และ input tokens ~2.8× ของ Claude เดี่ยว, และ context ที่ Navis ส่งเป็นเพียง ~1–4% ของ input tokens (overhead ของ CLI ครองส่วนใหญ่) จึงเลื่อน Context Broker ออกไปจนกว่าจะวัดงานจริงที่ prompt ใหญ่
+
 ## Phase 4 — Optional local coding
 
 สร้าง/ขยาย Agent Runner: tool loop, validation, permission enforcement, bounded turns, cancellation และ recovery

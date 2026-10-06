@@ -23,7 +23,7 @@ PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
              ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"))
 SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4),
             ("slots.claude", "Claude Code slots", 1, 4), ("limits.attempt_timeout", "Attempt timeout (seconds)", 60, 86400))
-MAX_DIFF, MAX_LOG, MAX_PROMPT = 200_000, 30_000, 20_000
+MAX_DIFF, MAX_LOG, MAX_PROMPT, MAX_DIFFS = 200_000, 30_000, 20_000, 64
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
@@ -129,6 +129,8 @@ class Bridge:
         """Full patch plus per-file scope/protected classification, cached per commit pair."""
         key = (t["project"], t["base"], t["head"], t["scope"])
         if key not in self.diffs:
+            while len(self.diffs) >= MAX_DIFFS:  # bounded cache: drop the oldest entry
+                self.diffs.pop(next(iter(self.diffs)))
             git = ["git", "-C", proj["path"]]
             patch = subprocess.run([*git, "diff", "--no-ext-diff", "--no-textconv", "--no-color", t["base"], t["head"]],
                                    capture_output=True, text=True, errors="replace").stdout

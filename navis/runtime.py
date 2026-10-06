@@ -16,7 +16,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import sandbox
+from . import sandbox, usage
 from .store import Store
 
 # ponytail: generic pattern; replace with each CLI's real rate-limit text after the Phase 1b probes.
@@ -27,7 +27,7 @@ DEFAULTS = {
     "slots": {"codex": 1, "claude": 1, "fake": 2, "checks": 1},
     "limits": {"agent_memory": "3G", "check_memory": "4G", "attempt_timeout": 3600,
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600],
-               "review_rounds": 2, "max_delegations": 3},
+               "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
 }
 
@@ -314,23 +314,35 @@ class Runtime:
         cooling = {r["agent"]: r["until"] for r in s.q("select * from cooldowns")}
         if is_paused(s):
             return
-        for t in s.q("select * from tasks where status in ('QUEUED', 'WAITING_QUOTA') order by id"):
+        # Fair share between projects: fewest running first, then least wall time used recently, then oldest.
+        recent = {r["project"]: r["secs"] for r in s.q(
+            "select t.project, sum(coalesce(a.ended, ?) - a.started) secs from attempts a join tasks t on t.id = a.task"
+            " where a.started >= ? group by t.project", now, now - self.cfg["limits"]["fairness_hours"] * 3600)}
+        cands = list(s.q("select * from tasks where status in ('QUEUED', 'WAITING_QUOTA') order by id"))
+
+        def runnable(t):
             if cooling.get(t["agent"], 0) > now:
-                continue
+                return False
             if sum(r["agent"] == t["agent"] for r in running) >= self.cfg["slots"].get(t["agent"], 1):
-                continue
+                return False
             if t["after"] is not None:
-                dep = s.one("select status, head from tasks where id = ?", t["after"])
+                dep = s.one("select status from tasks where id = ?", t["after"])
                 if not dep or dep["status"] != "COMPLETED":
-                    continue  # waits (a failed dependency keeps it queued; the GUI says why)
+                    return False  # waits (a failed dependency keeps it queued; the GUI says why)
             mine = json.loads(t["scope"])
             # A review reads one commit and writes nothing: it neither claims scope nor blocks anyone.
-            if t["kind"] != "review" and any(r["project"] == t["project"] and r["kind"] != "review"
-                                             and overlaps(mine, json.loads(r["scope"])) for r in running):
-                continue
+            return t["kind"] == "review" or not any(r["project"] == t["project"] and r["kind"] != "review"
+                                                    and overlaps(mine, json.loads(r["scope"])) for r in running)
+
+        while cands:
+            cands.sort(key=lambda t: (sum(r["project"] == t["project"] for r in running), recent.get(t["project"], 0.0), t["id"]))
+            t = next((c for c in cands if runnable(c)), None)
+            if t is None:
+                break
+            cands.remove(t)
             if s.move(t["id"], "RUNNING", ("QUEUED", "WAITING_QUOTA")):
                 if t["after"] is not None and not t["head"]:  # start from the dependency's result
-                    s.x("update tasks set base = ? where id = ?", dep["head"], t["id"])
+                    s.x("update tasks set base = (select head from tasks where id = ?) where id = ?", t["after"], t["id"])
                 running.append(t)
                 th = threading.Thread(target=self._run_attempt, args=(t["id"],), daemon=True)
                 self.threads.append(th)
@@ -484,6 +496,9 @@ class Runtime:
             outcome = "quota"
         else:
             outcome = "crashed"
+        used = usage.parse(t["agent"], (adir / "agent.log").read_bytes()[-usage.TAIL:].decode(errors="replace"))
+        s.x("update attempts set prompt_bytes = ?, usage = ? where id = ?", len(prompt.encode()),
+            json.dumps(used) if used else None, aid)
         head = self._collect(t, aid, adir, ro, base, proj)
         self._finish(t, aid, adir, "leak" if head is None else outcome, state, head or base, proj, ro)
 
