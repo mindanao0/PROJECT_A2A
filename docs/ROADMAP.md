@@ -35,6 +35,27 @@ UI แสดงงาน สถานะ backend ผลลัพธ์/diff ส�
 Local helper สรุป context/วิเคราะห์ log เท่านั้น ไม่มี write/exec tools
 Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านกับ `fake-agent` พร้อม evidence
 
+### Phase 1 evidence (`python3 -m pytest`, 56 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
+
+| Scenario (MVP_CONTRACT §8) | Evidence | สถานะ |
+| --- | --- | --- |
+| Single-agent coding | `test_done_task_is_verified_and_fetched` | ผ่าน |
+| Boundary escape / host socket | `test_agent_cannot_reach_host_secrets_or_control_state`, `test_checks_have_no_network_or_host_sockets`, `probes/boundary.sh` | ผ่าน (repo-config escalation ยังไม่มี test ตรง; กัน hooks ด้วย `core.hooksPath=/dev/null`) |
+| Scope / protected paths | `test_edit_outside_scope_needs_review`, `test_protected_path_needs_review` | ผ่าน |
+| Stop/Kill | `test_stop_kills_orphaned_processes` | ผ่าน |
+| Crash/restart, late result | `test_runner_restart_requeues_and_rejects_stale_result` | ผ่าน |
+| Approval race | `test_review_approval_is_bound_to_the_observed_attempt`, `test_stop_is_bound_to_the_observed_attempt` | ผ่าน |
+| Credential leak | `test_credential_in_diff_blocks_fetch_and_is_redacted` | ผ่าน |
+| Quota limit | `test_quota_waits_for_cooldown_without_using_a_retry` | ผ่าน |
+| Scope overlap / duplicate | `test_overlapping_scopes_never_run_together`, `test_duplicate_task_is_not_queued` | ผ่าน |
+| Local/remote boundary | `tests/test_server.py` (401/403, Origin, loopback only) | ผ่าน |
+| UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
+| Stale context | invalidate เมื่อ commit/instruction เปลี่ยน | ยังไม่มี test |
+| Unknown outcome | crash หลัง side effect ก่อนบันทึกผล → reconciliation | ยังไม่มี: `recover()` requeue อัตโนมัติ (ปลอดภัยเพราะ attempt ทำงานใน clone แยก และ fetch เป็น ref เดิมซ้ำได้ แต่ยังไม่ได้พิสูจน์ด้วย test) |
+| Local helper | summarize/log analysis แบบไม่มี write/exec | ยังไม่ implement |
+| Two-agent collaboration | — | Phase 2 |
+| cgroup MemoryMax | `probes/boundary.sh` ยืนยันค่าที่ตั้ง; ยังไม่มี test ว่า OOM ถูกฆ่าและ task ไม่ค้าง | บางส่วน |
+
 ## Phase 1b — Real backend probes (ใช้ quota)
 
 หลัง Phase 1 ผ่านกับ fake แล้วจึงรัน probes ใน [Execution Design](EXECUTION_DESIGN.md) §10 กับ Codex, Claude Code และ local backend หนึ่งตัว
