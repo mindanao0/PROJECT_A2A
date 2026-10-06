@@ -47,6 +47,9 @@ def main(argv=None):
         sub.add_parser(name, help=help_).add_argument("id", type=int)
     sub.add_parser("summarize", help="summarize a task with the local model (sources cited)").add_argument("id", type=int)
     sub.add_parser("integrate", help="merge a completed task into the integration branch (checks run on the result)").add_argument("id", type=int)
+    rv = sub.add_parser("review", help="queue a read-only review of a completed task's exact result")
+    rv.add_argument("id", type=int)
+    rv.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -81,6 +84,14 @@ def main(argv=None):
         except integrate.IntegrationError as e:
             sys.exit(f"not integrated: {e}")
         print(f"integrated at {commit[:10]}; checks passed")
+    elif args.cmd == "review":
+        try:
+            rid, dup = runtime.request_review(store, args.id, args.agent)
+        except ValueError as e:
+            sys.exit(str(e))
+        if dup:
+            sys.exit(f"duplicate of review task {dup}; not queued")
+        print(rid)
     elif args.cmd == "integration":
         st = integrate.status(store, args.project)
         print(f"branch {st['branch'] or '(detached)'} @ {st['head'][:10]}; integration @ {(st['commit'] or 'none')[:10]}")

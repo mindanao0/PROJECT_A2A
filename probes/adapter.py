@@ -4,6 +4,7 @@
     python3 probes/adapter.py codex|claude escape     # boundary self-test: the agent tries to leave its sandbox
     python3 probes/adapter.py codex|claude stop       # Stop mid-run: is the whole process tree gone?
     python3 probes/adapter.py codex|claude recover    # the runner "dies" mid-run: does the next runner clean up?
+    python3 probes/adapter.py codex|claude review     # this agent implements, the other one reviews it (read-only)
 
 Needs a prior login into the isolated agent home (docs/EXECUTION_DESIGN.md §3). State lives in a
 short /tmp dir (the MCP socket path must stay under 108 characters) and the agent home is
@@ -20,14 +21,17 @@ import time
 from pathlib import Path
 
 agent = sys.argv[1]
-spec = sys.argv[2] if len(sys.argv) > 2 else (
+spec = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "review" else (
     "Create the file src/hello.txt containing the word hi. Then call the run_check tool with name ok. "
     "Then call report_result with status done.")
 real = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "navis" / "agents" / agent
 work = Path(tempfile.mkdtemp(prefix="nv", dir="/tmp"))
 (work / "home/agents").mkdir(parents=True)
 (work / "cfg/projects").mkdir(parents=True)
-(work / "home/agents" / agent).symlink_to(real)
+review = len(sys.argv) > 2 and sys.argv[2] == "review"
+other = {"codex": "claude", "claude": "codex"}[agent]
+for name in (agent, other) if review else (agent,):
+    (work / "home/agents" / name).symlink_to(real.parent / name)
 proj = work / "proj"
 (proj / "src").mkdir(parents=True)
 (proj / "src/seed.txt").write_text("seed\n")
@@ -143,7 +147,30 @@ if stop:
         print("leftovers:\n" + "\n".join(after))
     shutil.rmtree(work, ignore_errors=True)
     sys.exit(not all(checks.values()))
-runtime.Runtime(s).run_until_idle(600)
+rt = runtime.Runtime(s)
+rt.run_until_idle(600)
+if review:
+    done = s.one("select status from tasks where id = ?", tid)["status"]
+    print(f"implementer {agent}: {done} in {time.time() - t0:.0f}s")
+    if done == "COMPLETED":
+        t1 = time.time()
+        rid, _ = runtime.request_review(s, tid, other)
+        rt.run_until_idle(600)
+        rev = s.one("select * from tasks where id = ?", rid)
+        print(f"reviewer {other}: {rev['status']} in {time.time() - t1:.0f}s | {rev['note'][:300]}")
+        print("verdicts:", [(r["verdict"], r["commit"][:10], r["summary"][:200]) for r in runtime.reviews(s, tid)])
+        rprompt = work / "home/attempts" / f"{rid}-1" / "prompt.txt"
+        print("--- review prompt (first 1500 chars)\n" + rprompt.read_text()[:1500])
+        rlog = work / "home/attempts" / f"{rid}-1" / "agent.log"
+        if other == "claude" and rlog.exists():
+            for line in rlog.read_text().splitlines():
+                if '"subtype":"init"' in line:
+                    print("reviewer tools:", ", ".join(json.loads(line)["tools"]))
+                    break
+        shutil.rmtree(work, ignore_errors=True)
+        sys.exit(rev["status"] != "COMPLETED")
+    shutil.rmtree(work, ignore_errors=True)
+    sys.exit(1)
 t = s.one("select * from tasks where id = ?", tid)
 print(f"{agent}: {t['status']} in {time.time() - t0:.0f}s | {t['note']}")
 for e in s.q("select attempt, kind, data from events where task = ? order by id", tid):

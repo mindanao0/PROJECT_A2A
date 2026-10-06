@@ -84,7 +84,8 @@ Exit: สอง agent ไม่เขียน workspace/resource ชนกั�
 ### Phase 2 status
 
 มีแล้ว: integration branch ตาม D-014 (`navis/integrate.py`): `navis-cli integrate <task>` รวมผล task ที่ COMPLETED บน `refs/navis/integration/<project>` ด้วย `git merge-tree` (ไม่แตะ working tree), รัน check ใน clone ของ commit ที่รวมแล้ว และเลื่อน ref ก็ต่อเมื่อผ่าน; `navis-cli integration <project>` ดูสถานะ; `navis-cli promote <project>` (หรือปุ่ม **Fast-forward** ใน GUI โหมด real และปุ่ม **Add to integration branch** ในรายละเอียดงาน) fast-forward branch ของผู้ใช้ โดยปฏิเสธเมื่อ working tree สกปรก, HEAD ไม่ใช่ branch, branch ขยับไปจาก integration, หรือไม่มี check ที่ผ่านบน commit นั้นพอดี และไม่รัน hooks
-ยังไม่มี: task dependencies, `request_review`/`delegate`, review ที่ผูก exact commit, integration ข้ามหลาย project, rollback ของ integration branch (ลบ ref ด้วย git เอง)
+Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review with Claude**): review task แบบอ่านอย่างเดียวบน commit ผลพอดี reviewer เห็น requirement + diff + ผล check ของ Runtime ไม่เห็นบันทึกของ implementer, verdict ผูก commit, ถ้า reviewer แก้ไฟล์ verdict เป็นโมฆะ; config `require_review = true` ใน project toml ทำให้ integrate ต้องมี review ที่ approve commit นั้น ลองกับของจริงทั้งสองทิศ (`python3 probes/adapter.py codex|claude review`: Codex เขียน → Claude รีวิว 8 s; Claude เขียน → Codex รีวิว 23 s; reviewer ของ Claude มี tool เพียง Glob/Grep/Read + navis)
+ยังไม่มี: task dependencies, `delegate`/proposal/critique หลายรอบ (bounded rounds), reviewer ที่ตรวจ integration commit สุดท้าย (ตอนนี้ review ผูกกับ commit ของ task ส่วน check รันบน integration commit), integration ข้ามหลาย project, rollback ของ integration branch (ลบ ref ด้วย git เอง); ยังไม่เคยลองให้ reviewer จับบั๊กจริง (รอบทดสอบใช้งานเล็กที่ถูกต้อง จึงยืนยันได้เฉพาะกลไก ไม่ใช่คุณภาพของ review)
 
 ## Phase 3 — Context and resource optimization
 

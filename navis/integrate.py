@@ -75,9 +75,11 @@ def integrate(rt, tid):
 def _integrate(rt, tid):
     s = rt.store
     t = s.one("select * from tasks where id = ?", tid)
-    if not t or t["status"] != "COMPLETED" or not t["head"]:
-        raise IntegrationError("only a completed task with a result can be integrated")
+    if not t or t["status"] != "COMPLETED" or not t["head"] or t["kind"] == "review":
+        raise IntegrationError("only a completed implementation task with a result can be integrated")
     proj = runtime.load_project(t["project"])
+    if proj["require_review"] and not runtime.review_approved(s, tid, t["head"]):
+        raise IntegrationError("this project requires an approving review of this exact result first")
     path, ref = proj["path"], REF.format(t["project"])
     with LOCKS[t["project"]]:
         head = git(path, "rev-parse", "HEAD")[1]

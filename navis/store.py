@@ -34,6 +34,10 @@ class Store:
         c = self._conn()
         try:
             c.executescript(SCHEMA)
+            have = {r["name"] for r in c.execute("pragma table_info(tasks)")}
+            for col, ddl in (("kind", "text not null default ''"), ("target", "integer")):
+                if col not in have:  # databases created before reviews existed
+                    c.execute(f"alter table tasks add column {col} {ddl}")
         finally:
             c.close()
 
