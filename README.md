@@ -14,6 +14,21 @@ python3 -m navis
 
 เปิด local launch link ที่พิมพ์ใน terminal เพื่อเข้า Control room, Task board, Agents, Activity log, Artifacts และ Runtime settings สร้างงานและทดลอง Pause/Resume, Stop/Kill, Retry, input/approval ผ่าน simulation ได้ งานจำลองไม่อ่านหรือแก้ repository และไม่เรียก Codex/Claude/Local LLM จริง
 
+### โหมด real (runtime จริง)
+
+```bash
+python3 -m navis --real
+```
+
+GUI เดียวกันแต่ขับ runtime จริง: งานรันใน sandbox (bwrap + cgroup) ผลลง `refs/navis/attempts/*` ไม่ merge/push ให้ ต้องมี project config ที่ `~/.config/navis/projects/<ชื่อ>.toml` ([ตัวอย่าง](docs/EXECUTION_DESIGN.md)) agent `fake` ใช้ทดสอบได้ทันทีโดยไม่ใช้ quota ส่วน `codex` / `claude` ต้อง login agent home ของ Navis ก่อน (แยกจาก login ปกติ) และ adapter ทั้งสองยังไม่ผ่าน probe จริง:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.local/share/navis/agents/claude claude auth login
+CODEX_HOME=~/.local/share/navis/agents/codex codex login --device-auth
+```
+
+`navis-cli add|ls|show|run|stop|answer|approve|reject` ใช้คิวงานจาก terminal ได้เช่นกัน และใช้ฐานข้อมูลเดียวกับ GUI
+
 วิธีติดตั้ง การใช้งาน controls, authentication, persistence, ข้อจำกัดและผลทดสอบ: [Local GUI Guide](docs/GUI.md)
 
 ## ขอบเขต MVP ที่ยืนยันแล้ว

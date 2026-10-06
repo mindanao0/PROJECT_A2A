@@ -34,6 +34,18 @@ def edit(path, text="x\n", attempt=None):
     return step("edit", path=path, text=text, **({"attempt": attempt} if attempt else {}))
 
 
+def sandbox_works():
+    """bwrap + a systemd user scope: absent on most CI runners, so these tests skip there."""
+    try:
+        for cmd in (["bwrap", "--ro-bind", "/", "/", "true"], ["systemd-run", "--user", "--scope", "-q", "true"]):
+            if subprocess.run(cmd, capture_output=True, timeout=20).returncode:
+                return False
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+@unittest.skipUnless(sandbox_works(), "needs bubblewrap and a systemd user session")
 class NavisTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="navis-test-"))

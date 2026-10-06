@@ -7,6 +7,7 @@ import time
 SCHEMA = """
 create table if not exists tasks(
   id integer primary key, project text not null, agent text not null, spec text not null,
+  title text not null default '',
   scope text not null, key text not null, base text not null, head text,
   status text not null, attempts integer not null default 0,
   note text not null default '', context text not null default '',
@@ -21,6 +22,7 @@ create table if not exists attempts(
 create table if not exists events(
   id integer primary key, task integer, attempt text, kind text not null,
   data text not null, at real not null);
+create table if not exists meta(key text primary key, value text not null);
 create table if not exists cooldowns(
   agent text primary key, until real not null, strikes integer not null);
 """

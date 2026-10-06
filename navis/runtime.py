@@ -136,7 +136,7 @@ ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd}
 
 # User commands
 
-def add_task(store, project, agent, spec, scope=(), base="HEAD"):
+def add_task(store, project, agent, spec, scope=(), base="HEAD", title=""):
     """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
@@ -146,9 +146,10 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD"):
                          capture_output=True, text=True, check=True).stdout.strip()
     key, now = task_key(project, spec, scope), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, scope, key, base, status, created, updated)"
-                         " values (?,?,?,?,?,?,'QUEUED',?,?)",
-                         project, agent, spec, json.dumps(scope), key, sha, now, now)
+        _, tid = store.x("insert into tasks(project, agent, spec, title, scope, key, base, status, created, updated)"
+                         " values (?,?,?,?,?,?,?,'QUEUED',?,?)",
+                         project, agent, spec, title or spec.strip().splitlines()[0][:80],
+                         json.dumps(scope), key, sha, now, now)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -174,6 +175,33 @@ def approve(store, tid):
             or store.move(tid, "COMPLETED", ("REVIEW",), note="approved by user"))
 
 
+def retry(store, tid):
+    """New attempt for a FAILED/CANCELLED task, continuing from its last snapshot."""
+    try:
+        return store.move(tid, "QUEUED", ("FAILED", "CANCELLED"), cancel=0, attempts=0, note="retry requested")
+    except sqlite3.IntegrityError:  # an equal task was queued meanwhile
+        return False
+
+
+def instruct(store, tid, text):
+    """Extra guidance, delivered with the next attempt's prompt."""
+    n, _ = store.x("update tasks set context = context || ? where id = ? and status not in"
+                   " ('COMPLETED', 'FAILED', 'CANCELLED')", f"User instruction: {text}\n", tid)
+    if n:
+        store.log(tid, None, "instruction", text=text)
+    return n == 1
+
+
+def set_paused(store, paused):
+    store.x("insert or replace into meta(key, value) values ('paused', ?)", "1" if paused else "0")
+    store.log(None, None, "control", paused=paused)
+
+
+def is_paused(store):
+    row = store.one("select value from meta where key = 'paused'")
+    return bool(row and row["value"] == "1")
+
+
 def reject(store, tid):
     return store.move(tid, "FAILED", ("REVIEW", "WAITING_APPROVAL"), note="rejected by user")
 
@@ -194,6 +222,8 @@ class Runtime:
         s, now = self.store, time.time()
         running = list(s.q("select * from tasks where status = 'RUNNING'"))
         cooling = {r["agent"]: r["until"] for r in s.q("select * from cooldowns")}
+        if is_paused(s):
+            return
         for t in s.q("select * from tasks where status in ('QUEUED', 'WAITING_QUOTA') order by id"):
             if cooling.get(t["agent"], 0) > now:
                 continue
@@ -222,24 +252,35 @@ class Runtime:
             time.sleep(0.1)
         return False
 
-    def run_forever(self):
-        lock = open(data_dir() / "runner.lock", "w")
+    def start(self):
+        """Take the single-runner lock and clean up after a crashed runner."""
+        data_dir().mkdir(parents=True, exist_ok=True)
+        self._lock = open(data_dir() / "runner.lock", "w")
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(self._lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise SystemExit("another navis runner is already active")
-        signal.signal(signal.SIGTERM, signal.default_int_handler)  # stop like Ctrl-C
         self.recover()
+
+    def shutdown(self):
+        """Stop attempts; unfinished tasks go back to QUEUED and resume from their last snapshot."""
+        self.stopping = True
+        for a in self.store.q("select unit from attempts where status = 'running'"):
+            sandbox.stop_unit(a["unit"])
+        for th in self.threads:
+            th.join(30)
+        if getattr(self, "_lock", None):
+            self._lock.close()  # releases the single-runner lock
+
+    def run_forever(self):
+        self.start()
+        signal.signal(signal.SIGTERM, signal.default_int_handler)  # stop like Ctrl-C
         try:
             while True:
                 self.tick()
                 time.sleep(0.5)
         except KeyboardInterrupt:
-            self.stopping = True
-            for a in self.store.q("select unit from attempts where status = 'running'"):
-                sandbox.stop_unit(a["unit"])
-            for th in self.threads:
-                th.join(30)
+            self.shutdown()
 
     def recover(self):
         """After a runner crash: kill leftover attempts and requeue their tasks.
