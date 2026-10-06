@@ -2,7 +2,17 @@
 
 ระบบกลางสำหรับให้ AI หลายตัวทำงานเป็นทีมในหลายโปรเจกต์ โดยมีเป้าหมายหลักคือให้ ChatGPT/Codex, Claude Code และ Local LLM สามารถคุย วิเคราะห์ แบ่งงาน ตรวจงาน และส่งผลลัพธ์หากันได้โดยไม่ต้องใช้ไฟล์ handoff เป็นช่องทางหลัก
 
-> สถานะ: **Design / Discussion Draft** — เอกสารใน repo นี้เป็น baseline สำหรับคุยและปรับแผนต่อ ยังไม่ถือว่า architecture ถูกล็อก
+> สถานะ: **Design / Discussion Draft** — ยืนยันขอบเขต MVP แล้ว 5 ข้อ แต่ implementation ยังไม่ล็อกและยังไม่มีผล feasibility tests
+
+## ขอบเขต MVP ที่ยืนยันแล้ว
+
+- เริ่มจาก CLI/session ที่ Runtime จัดการ ไม่เชื่อมแชทเดิมบนเว็บใน MVP
+- Linux first
+- Coding agent อ่าน–แก้โค้ด–รันทดสอบได้ภายใน assigned workspace ตามสิทธิ์ที่บังคับใช้จริง
+- Local LLM เริ่มจากสรุป context และวิเคราะห์ log; เพิ่ม coding หลัง Agent Runner ผ่านการทดสอบและอนุญาตบทบาทนั้น
+- UI บนเครื่องเดียวก่อน โดยเตรียม authentication/authorization boundary สำหรับ remote; ยังไม่เปิด remote listener
+
+ดู [Confirmed Decisions](docs/DECISIONS.md) และ [MVP Contract](docs/MVP_CONTRACT.md) สำหรับขอบเขตและข้อเสนอเกณฑ์ผ่าน
 
 ## เป้าหมาย
 
@@ -57,6 +67,8 @@
 
 ## เอกสาร
 
+- [Confirmed Decisions](docs/DECISIONS.md)
+- [MVP Contract / Acceptance Criteria](docs/MVP_CONTRACT.md)
 - [Architecture Draft](docs/ARCHITECTURE_DRAFT.md)
 - [Open Decisions](docs/OPEN_DECISIONS.md)
 - [Initial Roadmap](docs/ROADMAP.md)
