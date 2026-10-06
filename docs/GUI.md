@@ -136,6 +136,24 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 
 Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือมี navigation แบบเลื่อนแนวนอน, responsive panels, touch targets, skip link, live announcements และ task-evidence tabs ใช้ arrow-key navigation. ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก. Runtime รุ่นนี้ยังเป็น simulation จึงไม่มี agent log, provider prompt, real cgroup samples, real handoff หรือ config writer; UI จะแสดง unavailable/error ตามความสามารถที่ runtime รายงานและไม่สร้างค่า telemetry เอง
 
+## โหมด real (`python3 -m navis --real`)
+
+GUI เดียวกัน แต่ขับ runtime จริงผ่าน `navis/bridge.py` (interface `snapshot` / `task_detail` / `command` เดียวกับ simulation) งานรันใน sandbox (bwrap + cgroup) บน clone ของ project ผลลง `refs/navis/attempts/*` ไม่มี endpoint ที่ merge/push
+
+| ส่วนของ UI | ข้อมูลจริงที่ bridge ส่ง |
+| --- | --- |
+| Poll (`/api/snapshot`) | task และ artifact เฉพาะ metadata (ชื่อ/kind/hash) ไม่มีเนื้อหา; `updated_at` ของ task ขยับเมื่อมี event ใหม่ UI จึงโหลดใหม่เมื่อจำเป็น |
+| Task evidence (`/api/tasks/<id>`) | full patch (`git diff base head` ตัดที่ 200,000 ตัวอักษร) พร้อม `files[]` แยก `out_of_scope`/`protected`; `agent.log` (ท้าย 30,000 ไบต์) และ prompt จริงของ attempt ล่าสุด (redact credential แล้ว); output เต็มของ check/prepare |
+| Agents | `providers[]` พร้อมสถานะ login, slot และ `cooldown_until` จาก quota จริง |
+| Resources | slot ที่ใช้/ทั้งหมด และ `memory_bytes` ของ attempt ที่กำลังรัน อ่านจาก `memory.current` ของ cgroup |
+| Settings | แก้ slot ต่อ agent และ attempt timeout ได้ (เขียน `~/.config/navis/config.toml`; จำนวน slot ของ checks ต้อง restart) |
+| Add project | ชื่อ + path ที่เป็นรากของ Git repo; สร้าง `~/.config/navis/projects/<ชื่อ>.toml` โดย **ยังไม่มี check** ต้องเพิ่มเองในไฟล์ ไม่งั้นงานที่จบไม่ถูก verify ด้วยอะไรเลย |
+| Review with Claude / Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ agent นั้น login ใน agent home ของ Navis |
+| REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
+| Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
+
+ข้อจำกัด: adapter ของ Codex/Claude ยังไม่ผ่าน probe จริง; `gui-smoke.cjs` แก้ selector/ข้อความที่ UI เปลี่ยนไปแล้วและผ่านบน Chromium headless (2026-10-06, โหมด simulation เท่านั้น; ยังไม่ครอบคลุมโหมด real)
+
 ## ทดสอบ
 
 Core/transport/startup tests ใช้ standard library:

@@ -24,6 +24,8 @@ def main():
     parser.add_argument("--port", type=int, default=0, help="Loopback port (default: random free port)")
     parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "navis")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--real", action="store_true",
+                        help="drive the real runtime (sandboxed agents, projects from ~/.config/navis/projects)")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("Port must be between 0 and 65535")
@@ -37,7 +39,11 @@ def main():
     except BlockingIOError:
         os.close(lock_fd)
         raise SystemExit("Another Navis instance is already using this state directory")
-    runtime = Runtime(state_dir / "control.sqlite3")
+    if args.real:
+        from .bridge import Bridge
+        runtime = Bridge()
+    else:
+        runtime = Runtime(state_dir / "control.sqlite3")
     server = ControlServer(runtime, args.port)
     stopped = threading.Event()
 
@@ -53,7 +59,8 @@ def main():
     fd = os.open(launch_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as stream:
         stream.write(launch + "\n")
-    print("Navis · SIMULATION ONLY · no provider sessions or workspace writes", flush=True)
+    print("Navis · REAL RUNTIME · agents run sandboxed on your projects" if args.real
+          else "Navis · SIMULATION ONLY · no provider sessions or workspace writes", flush=True)
     print(f"Open locally: {launch}", flush=True)
     if not args.no_browser:
         webbrowser.open(launch)

@@ -1,0 +1,69 @@
+"""MCP stdio server started by the agent CLI inside its sandbox.
+
+Forwards tool calls to the attempt's Unix socket; that socket is the attempt's identity.
+Run as a script (stdlib only) because agent CLIs may not pass PYTHONPATH to MCP servers.
+"""
+
+import json
+import socket
+import sys
+
+TOOLS = [
+    {"name": "report_result",
+     "description": "Finish the task. status is done or failed.",
+     "inputSchema": {"type": "object", "required": ["status", "summary"], "properties": {
+         "status": {"type": "string", "enum": ["done", "failed"]},
+         "summary": {"type": "string"}}}},
+    {"name": "ask_user",
+     "description": "Ask the user a question, then end your turn. The task resumes with the answer.",
+     "inputSchema": {"type": "object", "required": ["question"], "properties": {
+         "question": {"type": "string"}}}},
+    {"name": "run_check",
+     "description": "Run a project check (tests, lint) in a sandbox without network. "
+                    "Returns the exit code and the end of the output.",
+     "inputSchema": {"type": "object", "required": ["name"], "properties": {
+         "name": {"type": "string"}}}},
+]
+
+
+def call(sock_path, tool, args):
+    with socket.socket(socket.AF_UNIX) as s:
+        s.connect(sock_path)
+        s.sendall((json.dumps({"tool": tool, "args": args}) + "\n").encode())
+        return json.loads(s.makefile().readline())
+
+
+def reply(mid, result=None, error=None):
+    msg = {"jsonrpc": "2.0", "id": mid}
+    msg.update({"error": error} if error else {"result": result})
+    print(json.dumps(msg), flush=True)
+
+
+def main(sock_path):
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        msg = json.loads(line)
+        mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
+        if mid is None:
+            continue  # notification
+        if method == "initialize":
+            reply(mid, {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "navis", "version": "0.1.0"}})
+        elif method == "tools/list":
+            reply(mid, {"tools": TOOLS})
+        elif method == "tools/call":
+            try:
+                r = call(sock_path, params.get("name"), params.get("arguments") or {})
+            except OSError as e:
+                r = {"ok": False, "text": f"navis runtime unreachable: {e}"}
+            reply(mid, {"content": [{"type": "text", "text": r["text"]}], "isError": not r["ok"]})
+        elif method == "ping":
+            reply(mid, {})
+        else:
+            reply(mid, error={"code": -32601, "message": f"unknown method {method}"})
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])

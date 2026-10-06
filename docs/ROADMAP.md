@@ -35,12 +35,39 @@ UI แสดงงาน สถานะ backend ผลลัพธ์/diff ส�
 Local helper สรุป context/วิเคราะห์ log เท่านั้น ไม่มี write/exec tools
 Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านกับ `fake-agent` พร้อม evidence
 
+### Phase 1 evidence (`python3 -m pytest`, 65 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
+
+| Scenario (MVP_CONTRACT §8) | Evidence | สถานะ |
+| --- | --- | --- |
+| Single-agent coding | `test_done_task_is_verified_and_fetched` | ผ่าน |
+| Boundary escape / host socket | `test_agent_cannot_reach_host_secrets_or_control_state`, `test_checks_have_no_network_or_host_sockets`, `test_hooks_and_config_planted_in_the_clone_never_run_on_the_host` (hook/fsmonitor ที่ agent วางใน clone รันได้เฉพาะใน sandbox), `probes/boundary.sh` | ผ่าน |
+| Scope / protected paths | `test_edit_outside_scope_needs_review`, `test_protected_path_needs_review` | ผ่าน |
+| Stop/Kill | `test_stop_kills_orphaned_processes` | ผ่าน |
+| Crash/restart, late result | `test_runner_restart_requeues_and_rejects_stale_result` | ผ่าน |
+| Approval race | `test_review_approval_is_bound_to_the_observed_attempt`, `test_stop_is_bound_to_the_observed_attempt` | ผ่าน |
+| Credential leak | `test_credential_in_diff_blocks_fetch_and_is_redacted` | ผ่าน |
+| Quota limit | `test_quota_waits_for_cooldown_without_using_a_retry` | ผ่าน |
+| Scope overlap / duplicate | `test_overlapping_scopes_never_run_together`, `test_duplicate_task_is_not_queued` | ผ่าน |
+| Local/remote boundary | `tests/test_server.py` (401/403, Origin, loopback only) | ผ่าน |
+| UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
+| Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry), `test_task_stays_pinned_to_its_base_when_the_project_moves` (task ผูก base commit); stale integration commit เป็นงาน Phase 2 เพราะ Phase 1 ไม่ merge | ผ่าน (ขอบเขต Phase 1) |
+| Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
+| Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `navis-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
+| Two-agent collaboration | — | Phase 2 |
+| cgroup MemoryMax | `test_process_over_the_memory_limit_is_killed_even_with_swap_available`; test นี้เจอว่า MemoryMax อย่างเดียวไม่เป็นเพดานจริงเมื่อมี swap (allocate 1.5 GB ใน limit 100M ยังรอด) จึงเพิ่ม `MemorySwapMax=0` | ผ่าน |
+
 ## Phase 1b — Real backend probes (ใช้ quota)
 
 หลัง Phase 1 ผ่านกับ fake แล้วจึงรัน probes ใน [Execution Design](EXECUTION_DESIGN.md) §10 กับ Codex, Claude Code และ local backend หนึ่งตัว
 ทดสอบ start, task/result, streaming, interrupt, resume, crash/restart, approval/enforcement และ usage visibility
 เก็บ compatibility matrix พร้อมเวอร์ชัน, test commands และ evidence; capability ที่ไม่ผ่านให้ unsupported/limited ไม่จำลองว่ารองรับ
 Exit: adapter จริงผ่าน acceptance scenarios ชุดเดียวกับ fake
+
+### Phase 1b status (2026-10-06; codex-cli 0.160.1, claude 2.1.291)
+
+ผ่าน: single-agent coding กับ Codex และ Claude จริงผ่าน Runner (`python3 probes/adapter.py codex|claude`), tool list ของ Claude ไม่มี Bash, resume ของ Codex หลัง kill -9
+เจอจาก probe: `codex exec` ต้อง pre-approve MCP tools; Claude ต้องใช้ `--tools` เพื่อ default-deny; Claude session หายถ้า kill ก่อนบันทึก (Runner ไม่พึ่ง session ของ provider)
+ยังไม่ผ่าน/ไม่ได้ทดสอบ: scenario อื่นของ §8 (boundary escape, stop/kill, crash/restart, quota) กับ CLI จริง, ข้อความ rate limit จริง (ไม่เผา quota เพื่อทดสอบ), local backend ใน matrix มีเฉพาะ summarize ไม่ใช่ coding
 
 ## Phase 2 — Two-agent collaboration and integration
 

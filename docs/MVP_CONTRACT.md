@@ -16,14 +16,14 @@
 
 | Capability | Codex | Claude Code | Local helper |
 | --- | --- | --- | --- |
-| Start และบันทึก session identity | Not tested | Not tested | Not tested |
-| ส่งงานใหม่และรับผลแบบ structured | Not tested | Not tested | Not tested |
-| Streaming และ final-result detection | Not tested | Not tested | Not tested |
-| ส่งข้อความขณะกำลังรัน | Not tested | Not tested | Not tested |
-| Interrupt turn / terminate process tree | Not tested | Not tested | Not tested |
-| Resume session หลัง interrupt/restart | Not tested | Not tested | Not tested |
-| Approval hook และ execution boundary | Partial: `codex sandbox -P :workspace` (0.160.1) บล็อกการเขียนนอก workspace และเน็ต แต่คำสั่งอ่าน auth ของตัวเองได้; `codex exec` ยังไม่ทดสอบ | Not tested | ไม่มี write/exec tools ตามขอบเขต MVP |
-| Usage/rate-limit visibility | Not tested | Not tested | Not tested |
+| Start และบันทึก session identity | ผ่าน: `thread.started.thread_id` (codex-cli 0.160.1, 2026-10-06) | ผ่าน: `session_id` ใน init event (claude 2.1.291, 2026-10-06) | ไม่ต้องมี session: เรียก Ollama `/api/chat` แบบ stateless (2026-10-06) |
+| ส่งงานใหม่และรับผลแบบ structured | ผ่าน: `probes/adapter.py codex` ใน attempt sandbox แก้ไฟล์ → `run_check` → `report_result` → verifier → COMPLETED (16–21 s) ต้อง pre-approve MCP ของ navis เพราะ `exec` ไม่ขออนุมัติ | ผ่าน: `probes/adapter.py claude` เหมือนกัน (7–9 s) | ผ่าน: `navis-cli summarize` กับ `qwen2.5-coder:7b` คืนข้อความพร้อม ref `[event:N]` ที่ Runtime ตรวจกับ sources (2026-10-06); structured = ref ตรวจได้ ไม่ใช่ JSON schema |
+| Streaming และ final-result detection | JSONL (`turn.completed`) แต่ Runner ตัดสินจาก `report_result`/exit code ไม่ parse stream | stream-json (`result`) เช่นเดียวกัน | Not tested |
+| ส่งข้อความขณะกำลังรัน | ไม่รองรับใน `exec`; Runner ใช้ attempt ใหม่แทน | ไม่รองรับใน `-p`; Runner ใช้ attempt ใหม่แทน | Not tested |
+| Interrupt turn / terminate process tree | ใช้ cgroup stop ของ Runner (ผ่านกับ fake-agent); ยังไม่รันกับ CLI จริง | เหมือนกัน | Not tested |
+| Resume session หลัง interrupt/restart | ผ่าน: kill -9 หลัง `thread.started` แล้ว `codex exec resume <id>` จำบริบทได้ | บางส่วน: resume หลัง session จบได้; ถ้า kill ก่อน session ถูกบันทึก (ทันทีหลัง init) → "No conversation found" Runner ไม่พึ่ง session ของ provider (ต่อจาก git snapshot) | Not tested |
+| Approval hook และ execution boundary | Partial: `codex sandbox -P :workspace` (0.160.1) บล็อกการเขียนนอก workspace และเน็ต แต่คำสั่งอ่าน auth ของตัวเองได้; `codex exec` รันใน attempt sandbox ได้ แต่ยังไม่ได้ให้ agent พยายามเขียนนอก workspace/ออกเน็ตภายใต้ exec | ผ่านบางส่วน: init event แสดง tools เพียง Edit, Glob, Grep, Read, Write + MCP ของ navis (ไม่มี Bash/web/Cron/RemoteTrigger) ด้วย `--tools` แบบ default-deny; ยังไม่ได้ทดสอบว่า Read อ่าน credential ของตัวเองได้ (limitation เดิมใน §3) | ไม่มี write/exec tools ตามขอบเขต MVP |
+| Usage/rate-limit visibility | token ใน `turn.completed.usage` (~59k input/งานสั้น); ข้อความ rate limit จริงยังไม่เคยเกิด | `total_cost_usd`, usage และ `rate_limit_event` ใน stream; ข้อความ rate limit จริงยังไม่เคยเกิด (`QUOTA_RE` ยังเป็น pattern ทั่วไป) | Not tested |
 
 สำหรับแต่ละช่อง บันทึก interface, backend/model version, test command, expected/observed result, evidence reference, limitation และวันที่
 เลือกหนึ่ง local backend ก่อน; ไม่ต้องพิสูจน์ Ollama, llama.cpp และ LM Studio ทั้งหมดพร้อมกัน
@@ -131,7 +131,7 @@ Cancel task ต้อง propagate ไป dependent/child work ตาม policy 
 | Local helper | สรุปพร้อม source refs/วิเคราะห์ log ได้ โดยไม่มี write/exec tools หรือ credentials |
 | Stop/Kill | หยุดงานที่มี child command ได้ตามนิยาม; ไม่มี process ที่ยังเขียน workspace หลังยืนยัน stopped |
 | Crash/restart | กู้ task/attempt ได้ ไม่ duplicate worker และไม่ replay side effects |
-| Unknown outcome | crash หลัง side effect ก่อนบันทึกผลแล้วเข้าสู่ reconciliation ไม่ retry อัตโนมัติ |
+| Unknown outcome | crash หลัง side effect ก่อนบันทึกผล: Phase 1 requeue ได้ เพราะ side effect นอก attempt clone จำกัดที่ `refs/navis/attempts/<id>` ซึ่งเขียนซ้ำได้ ไม่ replay และไม่มี duplicate worker; เมื่อเพิ่ม effect ภายนอก (push/merge) ต้องเข้า reconciliation ไม่ retry อัตโนมัติ |
 | Approval race | approval ของ payload/attempt เก่าใช้กับงานใหม่ไม่ได้ |
 | Two-agent collaboration | workspace/resource แยก; reviewer ตรวจ version ที่ถูกต้อง; integration tests ตรวจ final commit |
 | Stale context/result | เปลี่ยน commit/instruction แล้ว invalidate context/evidence และปฏิเสธ late result |
