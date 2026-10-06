@@ -5,7 +5,7 @@ import json
 import sys
 import time
 
-from . import runtime
+from . import helper, runtime
 
 
 def show_tasks(store):
@@ -45,6 +45,7 @@ def main(argv=None):
                         ("approve", "approve a task waiting for approval or in review"),
                         ("reject", "reject a task in review")]:
         sub.add_parser(name, help=help_).add_argument("id", type=int)
+    sub.add_parser("summarize", help="summarize a task with the local model (sources cited)").add_argument("id", type=int)
     an = sub.add_parser("answer", help="answer the agent's question")
     an.add_argument("id", type=int)
     an.add_argument("text")
@@ -63,6 +64,13 @@ def main(argv=None):
         show_task(store, args.id)
     elif args.cmd == "run":
         runtime.Runtime(store).run_forever()
+    elif args.cmd == "summarize":
+        try:
+            r = helper.summarize(store, args.id)
+        except (ValueError, OSError) as e:
+            sys.exit(f"summarize failed: {e}")
+        print(r["text"], f"\ncited: {', '.join(r['cited']) or 'none'}",
+              *([f"unverified refs: {', '.join(r['unknown_refs'])}"] if r["unknown_refs"] else []), sep="\n")
     elif args.cmd == "stop":
         print(runtime.stop_task(store, args.id))
     elif args.cmd == "answer":

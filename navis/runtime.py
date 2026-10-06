@@ -26,6 +26,7 @@ DEFAULTS = {
     "slots": {"codex": 1, "claude": 1, "fake": 2, "checks": 1},
     "limits": {"agent_memory": "3G", "check_memory": "4G", "attempt_timeout": 3600,
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600]},
+    "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
 }
 
 

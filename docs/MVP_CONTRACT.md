@@ -16,8 +16,8 @@
 
 | Capability | Codex | Claude Code | Local helper |
 | --- | --- | --- | --- |
-| Start และบันทึก session identity | Not tested | Not tested | Not tested |
-| ส่งงานใหม่และรับผลแบบ structured | Not tested | Not tested | Not tested |
+| Start และบันทึก session identity | Not tested | Not tested | ไม่ต้องมี session: เรียก Ollama `/api/chat` แบบ stateless (2026-10-06) |
+| ส่งงานใหม่และรับผลแบบ structured | Not tested | Not tested | ผ่าน: `navis-cli summarize` กับ `qwen2.5-coder:7b` คืนข้อความพร้อม ref `[event:N]` ที่ Runtime ตรวจกับ sources (2026-10-06); structured = ref ตรวจได้ ไม่ใช่ JSON schema |
 | Streaming และ final-result detection | Not tested | Not tested | Not tested |
 | ส่งข้อความขณะกำลังรัน | Not tested | Not tested | Not tested |
 | Interrupt turn / terminate process tree | Not tested | Not tested | Not tested |

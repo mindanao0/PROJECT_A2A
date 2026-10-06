@@ -35,7 +35,7 @@ UI แสดงงาน สถานะ backend ผลลัพธ์/diff ส�
 Local helper สรุป context/วิเคราะห์ log เท่านั้น ไม่มี write/exec tools
 Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านกับ `fake-agent` พร้อม evidence
 
-### Phase 1 evidence (`python3 -m pytest`, 58 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
+### Phase 1 evidence (`python3 -m pytest`, 62 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
 
 | Scenario (MVP_CONTRACT §8) | Evidence | สถานะ |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 | UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
 | Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry); commit เปลี่ยนยังไม่มี test | บางส่วน |
 | Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
-| Local helper | summarize/log analysis แบบไม่มี write/exec | ยังไม่ implement |
+| Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `navis-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
 | Two-agent collaboration | — | Phase 2 |
 | cgroup MemoryMax | `probes/boundary.sh` ยืนยันค่าที่ตั้ง; ยังไม่มี test ว่า OOM ถูกฆ่าและ task ไม่ค้าง | บางส่วน |
 
