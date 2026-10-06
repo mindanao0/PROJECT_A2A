@@ -35,12 +35,12 @@ UI แสดงงาน สถานะ backend ผลลัพธ์/diff ส�
 Local helper สรุป context/วิเคราะห์ log เท่านั้น ไม่มี write/exec tools
 Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านกับ `fake-agent` พร้อม evidence
 
-### Phase 1 evidence (`python3 -m pytest`, 62 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
+### Phase 1 evidence (`python3 -m pytest`, 65 ผ่าน, 2026-10-06; fake-agent ผ่าน runtime จริง: bwrap + systemd scope)
 
 | Scenario (MVP_CONTRACT §8) | Evidence | สถานะ |
 | --- | --- | --- |
 | Single-agent coding | `test_done_task_is_verified_and_fetched` | ผ่าน |
-| Boundary escape / host socket | `test_agent_cannot_reach_host_secrets_or_control_state`, `test_checks_have_no_network_or_host_sockets`, `probes/boundary.sh` | ผ่าน (repo-config escalation ยังไม่มี test ตรง; กัน hooks ด้วย `core.hooksPath=/dev/null`) |
+| Boundary escape / host socket | `test_agent_cannot_reach_host_secrets_or_control_state`, `test_checks_have_no_network_or_host_sockets`, `test_hooks_and_config_planted_in_the_clone_never_run_on_the_host` (hook/fsmonitor ที่ agent วางใน clone รันได้เฉพาะใน sandbox), `probes/boundary.sh` | ผ่าน |
 | Scope / protected paths | `test_edit_outside_scope_needs_review`, `test_protected_path_needs_review` | ผ่าน |
 | Stop/Kill | `test_stop_kills_orphaned_processes` | ผ่าน |
 | Crash/restart, late result | `test_runner_restart_requeues_and_rejects_stale_result` | ผ่าน |
@@ -50,11 +50,11 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 | Scope overlap / duplicate | `test_overlapping_scopes_never_run_together`, `test_duplicate_task_is_not_queued` | ผ่าน |
 | Local/remote boundary | `tests/test_server.py` (401/403, Origin, loopback only) | ผ่าน |
 | UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
-| Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry); commit เปลี่ยนยังไม่มี test | บางส่วน |
+| Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry), `test_task_stays_pinned_to_its_base_when_the_project_moves` (task ผูก base commit); stale integration commit เป็นงาน Phase 2 เพราะ Phase 1 ไม่ merge | ผ่าน (ขอบเขต Phase 1) |
 | Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
 | Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `navis-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
 | Two-agent collaboration | — | Phase 2 |
-| cgroup MemoryMax | `probes/boundary.sh` ยืนยันค่าที่ตั้ง; ยังไม่มี test ว่า OOM ถูกฆ่าและ task ไม่ค้าง | บางส่วน |
+| cgroup MemoryMax | `test_process_over_the_memory_limit_is_killed_even_with_swap_available`; test นี้เจอว่า MemoryMax อย่างเดียวไม่เป็นเพดานจริงเมื่อมี swap (allocate 1.5 GB ใน limit 100M ยังรอด) จึงเพิ่ม `MemorySwapMax=0` | ผ่าน |
 
 ## Phase 1b — Real backend probes (ใช้ quota)
 

@@ -39,9 +39,10 @@ def bwrap(cwd, rw=(), ro=(), net=True, env=None):
 
 
 def scope(unit, memory, argv):
-    """Run argv in its own cgroup: memory limit, and `stop` kills the whole tree."""
+    """Run argv in its own cgroup: memory limit (swap included: without MemorySwapMax=0 a 1.5 GB
+    allocation survives a 100M MemoryMax by swapping), and `stop` kills the whole tree."""
     return ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
-            "-p", f"MemoryMax={memory}", "-p", "TimeoutStopSec=10", "--", *argv]
+            "-p", f"MemoryMax={memory}", "-p", "MemorySwapMax=0", "-p", "TimeoutStopSec=10", "--", *argv]
 
 
 def stop_unit(unit):

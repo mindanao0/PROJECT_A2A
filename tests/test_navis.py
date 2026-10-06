@@ -308,6 +308,40 @@ class Safety(NavisTest):
         self.assertIn("instruction changed", " ".join(
             r["data"] for r in self.store.q("select data from events where task = ? and kind = 'status'", tid)))
 
+    def test_process_over_the_memory_limit_is_killed_even_with_swap_available(self):
+        (self.tmp / "cfg" / "config.toml").write_text(
+            "[limits]\nagent_memory = \"100M\"\nattempt_timeout = 30\nmax_attempts = 2\n[slots]\nfake = 2\n")
+        self.rt = runtime.Runtime(self.store)
+        tid = self.add(step("shell", cmd="python3 -c 'x = b\"x\" * (1500 * 2**20); print(\"survived\")'") + DONE)
+        t0 = time.time()
+        self.run_all()
+        self.assertLess(time.time() - t0, 25)  # the cgroup answered, not the 30 s attempt timeout
+        log = (self.tmp / "home" / "attempts" / f"{tid}-1" / "agent.log").read_text()
+        self.assertIn('"rc": -9', log)  # OOM-killed; without MemorySwapMax=0 it swaps and survives
+        self.assertNotIn("survived", log)
+        self.assertFalse(any(sandbox.active(a["unit"]) for a in self.store.q("select unit from attempts")))
+
+    def test_task_stays_pinned_to_its_base_when_the_project_moves(self):
+        base = self.git("rev-parse", "HEAD").strip()
+        tid = self.add(edit("src/x.py") + DONE)
+        (self.proj / "docs/b.md").write_text("changed later\n")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "moved")
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+        self.assertEqual(self.task(tid)["base"], base)
+        self.assertEqual(self.git("rev-parse", f"refs/navis/attempts/{tid}-1~1").strip(), base)
+
+    def test_hooks_and_config_planted_in_the_clone_never_run_on_the_host(self):
+        marker = self.tmp / "ran-on-host"
+        plant = (f"echo '#!/bin/sh' > .git/hooks/post-commit; echo 'touch {marker}' >> .git/hooks/post-commit; "
+                 f"chmod +x .git/hooks/post-commit; git config core.hooksPath .git/hooks; "
+                 f"git config core.fsmonitor 'touch {marker}; :'")
+        tid = self.add(step("shell", cmd=plant) + edit("src/x.py") + DONE)
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "COMPLETED", self.task(tid)["note"])
+        self.assertFalse(marker.exists())
+        self.assertEqual(sorted(p.name for p in (self.proj / ".git/hooks").glob("post-commit")), [])
+
 
 class Adapters(unittest.TestCase):
     @unittest.skipUnless(shutil.which("codex"), "codex not installed")
