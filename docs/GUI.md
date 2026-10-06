@@ -95,7 +95,7 @@ navis
 
 Core อยู่ใน `navis/core.py` แยกจาก UI/HTTP; SQLite transaction เดียวบันทึก snapshot และ event เมื่อคำสั่งสำเร็จ ข้อมูลอยู่ใน `control.sqlite3` ไม่เขียน config ลง VELA
 
-UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor และส่งครั้งละไม่เกิน 300 รายการเพื่อ backpressure UI แสดงล่าสุด 1,000 รายการ แต่ event เก่ายังอยู่ใน database การ disconnect browser ไม่ยกเลิก task และเมื่อเชื่อมใหม่ในหน้าเดิมจะอ่านต่อจาก cursor เดิม
+UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor และส่งครั้งละไม่เกิน 300 รายการเพื่อ backpressure snapshot ไม่ส่ง artifact body หรือ full event output; เมื่อเปิด task UI ขอ `/api/tasks/<task_id>` เพื่ออ่าน evidence และ output ของ task นั้น และจะขอใหม่เมื่อ `updated_at` เปลี่ยน UI แสดง event ล่าสุด 1,000 รายการ แต่ event เก่ายังอยู่ใน database การ disconnect browser ไม่ยกเลิก task และเมื่อเชื่อมใหม่ในหน้าเดิมจะอ่านต่อจาก cursor เดิม
 
 ถ้า Runtime restart งานที่ active/รอ input/approval/quota จะเป็น BLOCKED และ revoke attempt เดิม ไม่ replay side effects หรือ resume จำลองเงียบ ๆ ผู้ใช้ต้อง Retry เอง งาน QUEUED ยังคงรอ dispatch ตาม pause state เดิม
 
@@ -128,26 +128,31 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 | Add project | ซ่อนเมื่อ snapshot mode เป็น real; simulation ยังใช้ได้ |
 | Stop/Kill | Native confirmation dialog, Cancel ไม่ส่ง command, ยึด observed attempt |
 | Event | filter task/type และเปิด full `output` ถ้า event มี field นี้; simulation ยังไม่มี prepare/check stdout จริง |
+| Real runtime controls | Banner เปลี่ยนตาม mode; REVIEW เปิด diff โดยตรงและแสดง approval; WAITING_INPUT แสดง input หรือแจ้งเมื่อ runtime ยังไม่ส่ง prompt; handoff เปิดเมื่อ `capabilities.handoff` ระบุพร้อมใช้งาน |
+| Provider/resource/settings | Agents อ่าน `providers` และ `cooldown_until`; Resources อ่าน `attempt.memory_bytes` หรือ `resources.attempt_memory_bytes`; Settings อ่าน `settings.editable/items` และส่ง `update_settings` เมื่อ runtime รองรับ |
+| Project setup | Add project เปิดใน real mode พร้อม path field และส่ง `create_project`; Runtime เป็นผู้ตรวจสิทธิ์และจัดเก็บ path |
 | Attention | Tab title แสดงจำนวน pending requests; browser notification เป็น opt-in ใช้เมื่อแท็บอยู่เบื้องหลังและยังเปิดอยู่ ไม่ทำ background/service-worker notifications และบาง mobile browser ไม่รองรับ |
 | Refresh | HttpOnly session cookie; Runtime restart หมุนทั้ง bearer/session และต้องเปิด launch link ใหม่ |
 
-Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือ reflow, touch targets, skip link, dialog labels, focus styling และการรักษาตำแหน่งพิมพ์ระหว่าง poll ถูกปรับ แต่ **ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก** ตามที่ผู้ใช้เลือกข้าม browser check
+Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือมี navigation แบบเลื่อนแนวนอน, responsive panels, touch targets, skip link, live announcements และ task-evidence tabs ใช้ arrow-key navigation. ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก. Runtime รุ่นนี้ยังเป็น simulation จึงไม่มี agent log, provider prompt, real cgroup samples, real handoff หรือ config writer; UI จะแสดง unavailable/error ตามความสามารถที่ runtime รายงานและไม่สร้างค่า telemetry เอง
 
 ## โหมด real (`python3 -m navis --real`)
 
-GUI เดียวกัน แต่ขับ runtime จริงผ่าน `navis/bridge.py` (interface `snapshot` / `command` เดียวกับ simulation) งานรันใน sandbox (bwrap + cgroup) บน clone ของ project ผลลง `refs/navis/attempts/*` ไม่มี endpoint ที่ merge/push project มาจาก `~/.config/navis/projects/*.toml`
+GUI เดียวกัน แต่ขับ runtime จริงผ่าน `navis/bridge.py` (interface `snapshot` / `task_detail` / `command` เดียวกับ simulation) งานรันใน sandbox (bwrap + cgroup) บน clone ของ project ผลลง `refs/navis/attempts/*` ไม่มี endpoint ที่ merge/push
 
 | ส่วนของ UI | ข้อมูลจริงที่ bridge ส่ง |
 | --- | --- |
-| Code diff | full patch (`git diff base head`, ตัดที่ 200,000 ตัวอักษร) พร้อม `files[]` จัดกลุ่ม `out_of_scope` / `protected` จาก scope ของงานและ `protected` ใน project config |
-| Agent output / Prompt | `agent.log` (ท้าย 30,000 ไบต์) และ prompt ที่ส่งให้ agent จริงของ attempt ล่าสุด ผ่านการ redact credential แล้ว |
-| รอคิว | `queue_reasons`: paused, cooldown ของ provider, scope ทับกับงานที่กำลังรัน, slot เต็ม |
-| Resources | slot ที่ใช้/ทั้งหมดต่อ agent; RAM ยัง **ไม่วัด** |
-| Start from completed task | ใช้ commit ผลของงานต้นทางเป็น base; ต้องเป็นงานที่เสร็จ project เดียวกัน และ attempt ตรงกับที่เห็น |
-| Review with Claude / Continue with Codex | เปิดฟอร์มพร้อมงานต้นทางและ agent ที่เลือก ปุ่มปิดจน agent นั้น login ใน agent home ของ Navis |
-| REVIEW | ขอ Approve/Reject เมื่อ diff ออกนอก scope หรือแตะ path ที่ protected หรือ agent จบโดยไม่เรียก `report_result` |
+| Poll (`/api/snapshot`) | task และ artifact เฉพาะ metadata (ชื่อ/kind/hash) ไม่มีเนื้อหา; `updated_at` ของ task ขยับเมื่อมี event ใหม่ UI จึงโหลดใหม่เมื่อจำเป็น |
+| Task evidence (`/api/tasks/<id>`) | full patch (`git diff base head` ตัดที่ 200,000 ตัวอักษร) พร้อม `files[]` แยก `out_of_scope`/`protected`; `agent.log` (ท้าย 30,000 ไบต์) และ prompt จริงของ attempt ล่าสุด (redact credential แล้ว); output เต็มของ check/prepare |
+| Agents | `providers[]` พร้อมสถานะ login, slot และ `cooldown_until` จาก quota จริง |
+| Resources | slot ที่ใช้/ทั้งหมด และ `memory_bytes` ของ attempt ที่กำลังรัน อ่านจาก `memory.current` ของ cgroup |
+| Settings | แก้ slot ต่อ agent และ attempt timeout ได้ (เขียน `~/.config/navis/config.toml`; จำนวน slot ของ checks ต้อง restart) |
+| Add project | ชื่อ + path ที่เป็นรากของ Git repo; สร้าง `~/.config/navis/projects/<ชื่อ>.toml` โดย **ยังไม่มี check** ต้องเพิ่มเองในไฟล์ ไม่งั้นงานที่จบไม่ถูก verify ด้วยอะไรเลย |
+| Review with Claude / Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ agent นั้น login ใน agent home ของ Navis |
+| REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
+| Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
 
-ข้อจำกัด: Stop กับ Kill ฆ่า process tree ทันทีเหมือนกัน; snapshot ส่ง artifact เต็มทุก poll (ยังไม่แยก endpoint ต่อ task); adapter ของ Codex/Claude ยังไม่ผ่าน probe จริง; `gui-smoke.cjs` ยังล้มที่ `getByLabel('Simulation scenario', {exact:true})` ทั้งบน `main` และบน branch นี้ (ไม่เกี่ยวกับโหมด real)
+ข้อจำกัด: adapter ของ Codex/Claude ยังไม่ผ่าน probe จริง; `gui-smoke.cjs` ยังล้มที่ `getByLabel('Simulation scenario', {exact:true})` ทั้งบน `main` และ branch นี้ (ไม่เกี่ยวกับโหมด real)
 
 ## ทดสอบ
 

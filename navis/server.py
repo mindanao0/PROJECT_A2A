@@ -85,6 +85,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.reply(200, self.server.runtime.snapshot(cursor))
             return
+        if path.startswith("/api/tasks/"):
+            task_id = path.removeprefix("/api/tasks/")
+            if not task_id or "/" in task_id:
+                self.reply(404, {"error": "Not found"})
+                return
+            try:
+                self.reply(200, self.server.runtime.task_detail(task_id))
+            except ControlError as exc:
+                self.reply(404, {"error": str(exc)})
+            return
         files = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
         if path not in files:
             self.reply(404, {"error": "Not found"})

@@ -32,6 +32,11 @@ class BridgeTest(NavisTest):
             time.sleep(0.1)
         self.fail(f"condition not reached: {[(t['id'], t['state']) for t in self.b.snapshot()['tasks']]}")
 
+    def login(self, name):
+        home = runtime.data_dir() / "agents" / name
+        home.mkdir(parents=True, exist_ok=True)
+        (home / {"claude": ".credentials.json", "codex": "auth.json"}[name]).write_text("{}")
+
     def create(self, spec, **kw):
         r = self.b.command({"action": "create_task", "project_id": "p", "title": "t", "spec": spec,
                             "scope": "src/", "agent": "fake", **kw})
@@ -46,14 +51,16 @@ class BridgeTest(NavisTest):
 
 
 class Snapshot(BridgeTest):
-    def test_completed_task_shows_evidence_and_events(self):
+    def test_completed_task_poll_is_light_and_detail_has_the_evidence(self):
         tid = self.create(edit("src/new.py", "print(1)\n") + DONE)
         snap = self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
         t = self.task(snap, tid)
-        self.assertEqual(snap["mode"], "real")
-        self.assertEqual([p["id"] for p in snap["projects"]], ["p"])
-        kinds = {a["kind"]: a for a in t["artifacts"]}
-        self.assertEqual(set(kinds), {"verification", "diff", "agent_log", "prompt"})
+        self.assertEqual((snap["mode"], [p["id"] for p in snap["projects"]]), ("real", ["p"]))
+        self.assertEqual({a["kind"] for a in t["artifacts"]}, {"verification", "diff", "agent_log", "prompt"})
+        self.assertFalse(any("content" in a for a in t["artifacts"]), "the poll must not carry artifact bodies")
+        self.assertFalse(any("output" in e for e in snap["events"]))
+        d = self.b.task_detail(tid)
+        kinds = {a["kind"]: a for a in d["task"]["artifacts"]}
         self.assertIn("+print(1)", kinds["diff"]["content"])
         self.assertEqual(kinds["diff"]["files"], [{"path": "src/new.py", "out_of_scope": False, "protected": False}])
         self.assertEqual(kinds["diff"]["hash"], t["head"])
@@ -63,15 +70,18 @@ class Snapshot(BridgeTest):
         self.assertEqual(snap["resources"]["slots"][0], {"backend": "fake", "used": 0, "limit": 2})
         types = [e["type"] for e in snap["events"]]
         self.assertTrue({"STATE", "ATTEMPT", "TOOL", "CHECK", "OUTCOME"} <= set(types), types)
-        self.assertTrue(any(e.get("output") is not None for e in snap["events"] if e["type"] == "CHECK"))
+        self.assertTrue(all(e["task_id"] == tid for e in d["events"]))
+        self.assertTrue(any("output" in e for e in d["events"] if e["type"] == "CHECK"))
+        self.assertGreaterEqual(t["updated_at"], max(e["time"] for e in d["events"]))
         again = self.b.snapshot(snap["cursor"])
-        self.assertEqual(again["events"], [])
-        self.assertEqual(again["cursor"], snap["cursor"])
+        self.assertEqual((again["events"], again["cursor"]), ([], snap["cursor"]))
+        with self.assertRaises(ControlError):
+            self.b.task_detail("999")
 
     def test_diff_flags_out_of_scope_and_protected_files(self):
         tid = self.create(edit("docs/b.md") + edit("tests/t.sh") + edit("src/ok.py") + DONE)
-        snap = self.pump(lambda s: self.task(s, tid)["state"] == "REVIEW")
-        diff = next(a for a in self.task(snap, tid)["artifacts"] if a["kind"] == "diff")
+        self.pump(lambda s: self.task(s, tid)["state"] == "REVIEW")
+        diff = next(a for a in self.b.task_detail(tid)["task"]["artifacts"] if a["kind"] == "diff")
         flags = {f["path"]: (f["out_of_scope"], f["protected"]) for f in diff["files"]}
         self.assertEqual(flags, {"docs/b.md": (True, False), "tests/t.sh": (True, True), "src/ok.py": (False, False)})
 
@@ -110,12 +120,17 @@ class Snapshot(BridgeTest):
             self.b.command({**base, "source_task_id": running, "source_attempt_id": self.task(self.b.snapshot(), running)["attempt_id"], "spec": "third"})
         self.cmd(running, "kill")
 
-    def test_agents_report_login_state(self):
-        agents = {a["name"]: a for a in self.b.snapshot()["agents"]}
-        self.assertEqual(agents["fake"]["status"], "Ready")
-        self.assertEqual(agents["codex"]["status"], "Not logged in")
-        self.assertEqual(agents["claude"]["status"], "Not logged in")
-        self.assertFalse(agents["codex"]["ok"])
+    def test_providers_report_login_state_and_handoff_capability(self):
+        snap = self.b.snapshot()
+        by = {p["id"]: p for p in snap["providers"]}
+        self.assertEqual((by["fake"]["status"], by["fake"]["slot_limit"]), ("Ready", 2))
+        self.assertEqual((by["codex"]["status"], by["codex"]["reason"]), ("Unavailable", "Not logged in"))
+        self.assertEqual(snap["capabilities"]["handoff"], {"claude_review": False, "codex_continue": False})
+        self.assertFalse(snap["capabilities"]["controls"]["graceful_stop"])
+        self.login("claude")
+        snap = self.b.snapshot()
+        self.assertTrue(snap["capabilities"]["handoff"]["claude_review"])
+        self.assertEqual({p["id"]: p["status"] for p in snap["providers"]}["claude"], "Ready")
 
     def test_duplicate_and_bad_input(self):
         a = self.create(DONE)
@@ -156,14 +171,13 @@ class Controls(BridgeTest):
         self.b.command({"action": "resume"})
         self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
 
-    def test_review_approval_needs_the_current_request(self):
+    def test_review_approval_is_bound_to_the_observed_attempt(self):
         tid = self.create(edit("docs/b.md") + DONE)
         snap = self.pump(lambda s: self.task(s, tid)["state"] == "REVIEW")
-        t = self.task(snap, tid)
-        self.assertIn("outside scope", t["pending"]["message"])
+        self.assertIsNone(self.task(snap, tid)["pending"])  # the UI shows the diff instead of a question
         with self.assertRaises(ControlError):
-            self.cmd(tid, "approve", pending_id="stale")
-        self.cmd(tid, "approve", pending_id=t["pending"]["id"])
+            self.b.command({"action": "approve", "task_id": tid, "attempt_id": "0-0"})
+        self.cmd(tid, "approve")
         self.assertEqual(self.task(self.b.snapshot(), tid)["state"], "COMPLETED")
 
     def test_answer_and_instruction_reach_the_next_attempt(self):
@@ -179,6 +193,51 @@ class Controls(BridgeTest):
         text = self.shown(f"{tid}-2", "src/prompt.txt")
         self.assertIn("User instruction: use blue", text)
         self.assertIn("A: blue", text)
+
+
+class Runtime(BridgeTest):
+    def test_hand_off_to_claude_needs_login_and_starts_from_the_result(self):
+        first = self.create(edit("src/one.py") + DONE)
+        self.pump(lambda s: self.task(s, first)["state"] == "COMPLETED")
+        with self.assertRaises(ControlError):
+            self.cmd(first, "review_with_claude")  # not logged in
+        self.login("claude")
+        new = self.cmd(first, "review_with_claude")["task_id"]
+        t = self.task(self.b.snapshot(), new)
+        self.assertEqual((t["backend"], t["state"], t["source"]["task_id"]), ("claude", "QUEUED", first))
+        self.assertIn("Review", t["title"])
+        base = self.store.one("select base from tasks where id = ?", int(new))["base"]
+        self.assertEqual(base, self.task(self.b.snapshot(), first)["head"])
+        self.cmd(new, "stop")
+
+    def test_settings_validate_apply_and_persist(self):
+        items = {i["key"]: i for i in self.b.snapshot()["settings"]["items"]}
+        self.assertEqual(items["slots.fake"]["value"], 2)
+        for bad in ({"slots.fake": "0"}, {"slots.fake": "x"}, {"slots.checks": "3"}, {"limits.attempt_timeout": "5"}):
+            with self.assertRaises(ControlError, msg=bad):
+                self.b.command({"action": "update_settings", "values": bad})
+        self.b.command({"action": "update_settings", "values": {"slots.fake": "3", "limits.attempt_timeout": "120"}})
+        self.assertEqual(self.b.rt.cfg["slots"]["fake"], 3)
+        self.assertEqual(runtime.load_config()["limits"]["attempt_timeout"], 120)
+        self.assertEqual(runtime.load_config()["slots"]["fake"], 3)
+
+    def test_create_project_validates_the_repository(self):
+        self.git("config", "user.name", "t")
+        for bad in ({"name": "bad name", "path": str(self.proj)}, {"name": "x", "path": str(self.proj / "src")},
+                    {"name": "x", "path": "/nonexistent"}, {"name": "p", "path": str(self.proj)}):
+            with self.assertRaises(ControlError, msg=bad):
+                self.b.command({"action": "create_project", **bad})
+        self.assertEqual(self.b.command({"action": "create_project", "name": "second", "path": str(self.proj)}), {"id": "second"})
+        self.assertEqual({p["id"] for p in self.b.snapshot()["projects"]}, {"p", "second"})
+
+    def test_running_attempt_reports_measured_memory(self):
+        tid = self.create(step("hang"))
+        snap = self.pump(lambda s: self.task(s, tid)["state"] == "RUNNING")
+        mem = self.pump(lambda s: self.task(s, tid)["attempts"][0]["memory_bytes"] is not None)
+        self.assertGreater(self.task(mem, tid)["attempts"][0]["memory_bytes"], 0)
+        self.cmd(tid, "kill")
+        self.pump(lambda s: self.task(s, tid)["state"] == "CANCELLED")
+        self.assertIsNone(self.task(self.b.snapshot(), tid)["attempts"][0]["memory_bytes"])
 
 
 class Http(BridgeTest):
@@ -200,6 +259,10 @@ class Http(BridgeTest):
         self.pump(lambda s: self.task(s, out["task_id"])["state"] == "COMPLETED")
         status, snap = call("GET", "/api/snapshot?cursor=0")
         self.assertEqual((status, snap["mode"]), (200, "real"))
+        status, detail = call("GET", f"/api/tasks/{out['task_id']}")
+        self.assertEqual(status, 200)
+        self.assertTrue(any(a["kind"] == "diff" and "content" in a for a in detail["task"]["artifacts"]))
+        self.assertEqual(call("GET", "/api/tasks/999")[0], 404)
         status, err = call("POST", "/api/command", {"action": "stop", "task_id": out["task_id"], "attempt_id": "x"})
         self.assertEqual(status, 400)
         self.assertIn("Attempt changed", err["error"])

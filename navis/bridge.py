@@ -1,21 +1,29 @@
 """Lets the GUI (navis.server) drive the real runtime.
 
-Same two methods as the simulated navis.core.Runtime: snapshot(cursor) and command(payload).
+Same interface as the simulated navis.core.Runtime: snapshot(cursor), task_detail(id), command(payload).
 """
 
 import hashlib
 import json
+import os
+import re
 import subprocess
 import time
+import tomllib
 from pathlib import Path
 
 from . import runtime, sandbox
 from .core import ControlError, clean_text, normalize_scope
 
-ACTIVE = ("RUNNING", "WAITING_INPUT", "WAITING_APPROVAL", "REVIEW")
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
 LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
-MAX_DIFF, MAX_LOG = 200_000, 30_000
+PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
+             ("codex", "Codex", "Codex CLI adapter (unverified)"),
+             ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"))
+SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4),
+            ("slots.claude", "Claude Code slots", 1, 4), ("limits.attempt_timeout", "Attempt timeout (seconds)", 60, 86400))
+MAX_DIFF, MAX_LOG, MAX_PROMPT = 200_000, 30_000, 20_000
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
          "leak": "LEAK", "stale-result-dropped": "STALE"}
@@ -35,6 +43,25 @@ def message(kind, d):
             "leak": lambda: "Agent credential found in a diff; result blocked",
             "stale-result-dropped": lambda: "Late result from a revoked attempt was dropped",
             }.get(kind, lambda: kind)()
+
+
+def dump_toml(cfg):
+    """Config is only tables of scalars and number lists, so JSON syntax is valid TOML here."""
+    out = []
+    for section, values in cfg.items():
+        out.append(f"[{section}]")
+        out += [f"{k} = {json.dumps(v)}" for k, v in values.items()]
+        out.append("")
+    return "\n".join(out)
+
+
+def memory_bytes(unit):
+    uid = os.getuid()
+    base = Path(f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/app.slice/{unit}.scope")
+    try:
+        return int((base / "memory.current").read_text())
+    except (OSError, ValueError):
+        return None
 
 
 class Bridge:
@@ -61,22 +88,32 @@ class Bridge:
                 out.append({"id": f.stem, "name": f.stem, "path": "invalid", "description": f"Config error: {e}"[:200]})
                 continue
             out.append({"id": f.stem, "name": f.stem, "path": p["path"],
-                        "description": f"{len(p['checks'])} check(s) · protected: {', '.join(p['protected']) or 'none'}"})
+                        "description": f"{len(p['checks'])} check(s) / protected: {', '.join(p['protected']) or 'none'}"})
         return out
 
-    def agents(self, busy, cool):
+    def logged_in(self, name):
+        f = LOGIN_FILE.get(name)
+        return not f or (runtime.data_dir() / "agents" / name / f).exists()
+
+    def providers(self, busy, cool):
         slots, out = self.rt.cfg["slots"], []
-        for name, desc in (("fake", "Scripted test agent · sandboxed, no quota"),
-                           ("codex", "Codex CLI · adapter not yet verified"),
-                           ("claude", "Claude Code CLI · adapter not yet verified")):
-            login = LOGIN_FILE.get(name)
-            ok = not login or (runtime.data_dir() / "agents" / name / login).exists()
-            n = busy.get(name, 0)
-            out.append({"name": name, "desc": desc, "ok": ok,
-                        "until": cool.get(name) if cool.get(name, 0) > time.time() else None,
-                        "status": "Not logged in" if not ok else "Busy" if n else "Ready",
-                        "sub": f"{n} / {slots.get(name, 1)} slots" if ok else f"login: see Runtime settings"})
+        for pid, name, desc in PROVIDERS:
+            ok, until = self.logged_in(pid), cool.get(pid)
+            until = until if until and until > time.time() else None
+            out.append({"id": pid, "name": name, "ok": ok, "slots_used": busy.get(pid, 0), "slot_limit": slots.get(pid, 1),
+                        "status": "Unavailable" if not ok else "Cooldown" if until else "Busy" if busy.get(pid) else "Ready",
+                        "cooldown_until": until, "capability": desc,
+                        "reason": "Not logged in" if not ok else None,
+                        "message": ("Log in this agent's Navis account once, outside the GUI (see the README). "
+                                    "Your normal CLI login is not used.") if not ok else
+                                   "Provider cooldown starts when the CLI reports a quota or rate limit." if pid != "fake" else
+                                   "Runs scripted scenarios inside the same sandbox as real agents."})
         return out
+
+    def settings(self):
+        cfg = self.rt.cfg
+        return {"editable": True, "items": [{"key": k, "label": label, "type": "number", "min": lo, "max": hi, "required": True,
+                                             "value": cfg[k.split(".")[0]][k.split(".")[1]]} for k, label, lo, hi in SETTINGS]}
 
     def diff(self, t, proj):
         """Full patch plus per-file scope/protected classification, cached per commit pair."""
@@ -86,7 +123,7 @@ class Bridge:
             patch = subprocess.run([*git, "diff", "--no-ext-diff", "--no-textconv", "--no-color", t["base"], t["head"]],
                                    capture_output=True, text=True, errors="replace").stdout
             if len(patch) > MAX_DIFF:
-                patch = patch[:MAX_DIFF] + f"\n… patch truncated at {MAX_DIFF} characters; use git diff for the rest\n"
+                patch = patch[:MAX_DIFF] + f"\n... patch truncated at {MAX_DIFF} characters; use git diff for the rest\n"
             scope = json.loads(t["scope"])
             files = [{"path": f, "out_of_scope": not any(runtime.under(f, sc) for sc in scope),
                       "protected": any(runtime.under(f, p) for p in proj["protected"])}
@@ -101,108 +138,137 @@ class Bridge:
             return None
         return self.rt.redact(data.decode(errors="replace"))
 
-    def artifact(self, aid, kind, name, content):
-        return {"id": f"{kind}{aid}", "kind": kind, "name": name, "attempt_id": aid, "content": content,
-                "hash": hashlib.sha256(content.encode()).hexdigest(), "simulated": False}
+    def exists(self, aid, name):
+        return (runtime.data_dir() / "attempts" / aid / name).exists()
 
-    def snapshot(self, cursor=0):
+    def artifact(self, aid, kind, name, content=None, **extra):
+        a = {"id": f"{kind}{aid}", "kind": kind, "name": name, "attempt_id": aid, "simulated": False, **extra}
+        if content is not None:
+            a |= {"content": content, "hash": hashlib.sha256(content.encode()).hexdigest()} | extra
+        return a
+
+    def artifacts(self, t, aid, evidence, full, projects):
+        """Evidence for one task. `full` adds bodies; the poll only needs names and kinds."""
+        arts = []
+        for e in evidence:
+            d = json.loads(e["data"])
+            body = f"exit {d['rc']}\n{d.get('tail', '')}"
+            a = self.artifact(e["attempt"], "verification", f"{e['kind']} {d['name']}", body if full else None, exit_code=d["rc"])
+            arts.append(a | {"id": f"ev{e['id']}"})
+        if t["head"] and t["head"] != t["base"]:
+            if not full:
+                arts.append(self.artifact(aid, "diff", "Code diff", hash=t["head"]))
+            else:
+                if t["project"] not in projects:
+                    projects[t["project"]] = runtime.load_project(t["project"])
+                patch, files = self.diff(t, projects[t["project"]])
+                arts.append(self.artifact(aid, "diff", "Code diff", patch, files=files) | {"hash": t["head"]})
+        if aid:
+            for kind, file, label, limit in (("agent_log", "agent.log", "Agent output", MAX_LOG), ("prompt", "prompt.txt", "Prompt sent", MAX_PROMPT)):
+                name = f"{label} / attempt {aid}"
+                if full:
+                    text = self.read(aid, file, limit)
+                    if text is not None:
+                        arts.append(self.artifact(aid, kind, name, text))
+                elif self.exists(aid, file):
+                    arts.append(self.artifact(aid, kind, name))
+        return arts
+
+    def context(self):
+        """Everything the task views share, read once per request."""
         s, now = self.store, time.time()
-        slots = self.rt.cfg["slots"]
         rows = list(s.q("select * from tasks order by id"))
-        paused = runtime.is_paused(s)
-        cool = {r["agent"]: r["until"] for r in s.q("select * from cooldowns")}
-        running = [t for t in rows if t["status"] == "RUNNING"]
-        busy = {}
-        for t in running:
-            busy[t["agent"]] = busy.get(t["agent"], 0) + 1
         attempts, latest = {}, {}
         for a in s.q("select * from attempts order by started"):
             attempts.setdefault(a["task"], []).append(a)
             latest[a["task"]] = a["id"]
-        evidence = {}
-        for e in s.q("select * from events where task is not null and kind in ('check', 'prepare') order by id"):
-            evidence.setdefault(e["task"], []).append(e)
-        instr = {}
-        for e in s.q("select * from events where task is not null and kind = 'instruction' order by id"):
-            instr.setdefault(e["task"], []).append(e)
-        projects, tasks = {}, []
+        evidence, instr = {}, {}
+        for e in s.q("select * from events where task is not null and kind in ('check', 'prepare', 'instruction') order by id"):
+            (instr if e["kind"] == "instruction" else evidence).setdefault(e["task"], []).append(e)
+        busy = {}
         for t in rows:
-            tid, state, aid = t["id"], t["status"], latest.get(t["id"])
-            if state == "RUNNING" and t["cancel"]:
-                state = "CANCELLING"
-            arts = []
-            for e in evidence.get(tid, []):
-                d = json.loads(e["data"])
-                body = f"exit {d['rc']}\n{d.get('tail', '')}"
-                arts.append(self.artifact(e["attempt"], "verification", f"{e['kind']} {d['name']}", body) | {"id": f"ev{e['id']}", "exit_code": d["rc"]})
-            if t["head"] and t["head"] != t["base"]:
-                if t["project"] not in projects:
-                    projects[t["project"]] = runtime.load_project(t["project"])
-                patch, files = self.diff(t, projects[t["project"]])
-                arts.append(self.artifact(aid, "diff", "Code diff", patch) | {"hash": t["head"], "files": files})
-            if aid:
-                for kind, name, label, limit in (("agent_log", "agent.log", "Agent output", MAX_LOG), ("prompt", "prompt.txt", "Prompt sent", 20_000)):
-                    text = self.read(aid, name, limit)
-                    if text is not None:
-                        arts.append(self.artifact(aid, kind, f"{label} / attempt {aid}", text))
-            reasons = []
-            if state == "QUEUED":
-                if paused:
-                    reasons.append({"code": "paused", "message": "Dispatch is paused"})
-                if cool.get(t["agent"], 0) > now:
-                    reasons.append({"code": "cooldown", "until": cool[t["agent"]], "message": f"{t['agent']} is cooling down after a quota limit"})
-                mine = json.loads(t["scope"])
-                for o in running:
-                    if o["project"] == t["project"] and runtime.overlaps(mine, json.loads(o["scope"])):
-                        reasons.append({"code": "scope", "task_id": str(o["id"]), "message": f"Scope held by {o['title'] or 'task ' + str(o['id'])}"})
-                if busy.get(t["agent"], 0) >= slots.get(t["agent"], 1):
-                    reasons.append({"code": "slot", "message": f"{t['agent']} slots full ({busy[t['agent']]}/{slots.get(t['agent'], 1)})"})
-                if not reasons:
-                    reasons.append({"code": "ready", "message": "Ready for the next dispatch tick"})
-            elif state == "WAITING_QUOTA":
-                reasons.append({"code": "cooldown", "until": cool.get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
-            pending = None
-            if state in ("WAITING_INPUT", "WAITING_APPROVAL", "REVIEW"):
-                pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
-                           "expires": t["updated"] + 86400, "payload_hash": ""}
-            tasks.append({
-                "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
-                "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
-                "attempt_id": aid, "pending": pending, "artifacts": arts, "queue_reasons": reasons,
-                "due": cool.get(t["agent"], t["updated"]) if state == "WAITING_QUOTA" else None,
-                "activity": t["note"] or state.replace("_", " ").title(), "head": t["head"],
-                "result_ref": f"refs/navis/attempts/{aid}" if state == "COMPLETED" and t["head"] and aid else None,
-                "source": json.loads(t["source"]) if t["source"] else None,
-                "attempts": [{"id": a["id"], "started_at": a["started"], "ended_at": a["ended"], "backend": t["agent"],
-                              "state": (a["outcome"] or "RUNNING") if a["status"] != "running" else "RUNNING"}
-                             for a in attempts.get(tid, [])],
-                "instructions": [{"version": i + 1, "text": json.loads(e["data"])["text"], "time": e["at"]}
-                                 for i, e in enumerate(instr.get(tid, []))],
-                "created_at": t["created"], "updated_at": t["updated"],
-            })
-        proj_of = {str(t["id"]): t["project"] for t in rows}
+            if t["status"] == "RUNNING":
+                busy[t["agent"]] = busy.get(t["agent"], 0) + 1
+        return {"now": now, "rows": rows, "attempts": attempts, "latest": latest, "evidence": evidence, "instr": instr,
+                "busy": busy, "cool": {r["agent"]: r["until"] for r in s.q("select * from cooldowns")},
+                "touched": {r["task"]: r["m"] for r in s.q("select task, max(at) m from events where task is not null group by task")},
+                "running": [t for t in rows if t["status"] == "RUNNING"], "paused": runtime.is_paused(s), "projects": {}}
+
+    def task_view(self, t, c, full):
+        slots, tid, aid = self.rt.cfg["slots"], t["id"], c["latest"].get(t["id"])
+        state = "CANCELLING" if t["status"] == "RUNNING" and t["cancel"] else t["status"]
+        reasons = []
+        if state == "QUEUED":
+            if c["paused"]:
+                reasons.append({"code": "paused", "message": "Dispatch is paused"})
+            if c["cool"].get(t["agent"], 0) > c["now"]:
+                reasons.append({"code": "cooldown", "until": c["cool"][t["agent"]], "message": f"{t['agent']} is cooling down after a quota limit"})
+            mine = json.loads(t["scope"])
+            for o in c["running"]:
+                if o["project"] == t["project"] and runtime.overlaps(mine, json.loads(o["scope"])):
+                    reasons.append({"code": "scope", "task_id": str(o["id"]), "message": f"Scope held by {o['title'] or 'task ' + str(o['id'])}"})
+            if c["busy"].get(t["agent"], 0) >= slots.get(t["agent"], 1):
+                reasons.append({"code": "slot", "message": f"{t['agent']} slots full ({c['busy'][t['agent']]}/{slots.get(t['agent'], 1)})"})
+            reasons = reasons or [{"code": "ready", "message": "Ready for the next dispatch tick"}]
+        elif state == "WAITING_QUOTA":
+            reasons.append({"code": "cooldown", "until": c["cool"].get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
+        pending = None
+        if state in ("WAITING_INPUT", "WAITING_APPROVAL"):  # REVIEW has no separate question; the UI shows the diff
+            pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
+                       "expires": t["updated"] + 86400, "payload_hash": ""}
+        return {
+            "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
+            "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
+            "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
+            "artifacts": self.artifacts(t, aid, c["evidence"].get(tid, []), full, c["projects"]),
+            "due": c["cool"].get(t["agent"], t["updated"]) if state == "WAITING_QUOTA" else None,
+            "activity": t["note"] or state.replace("_", " ").title(),
+            "result_ref": f"refs/navis/attempts/{aid}" if state == "COMPLETED" and t["head"] and aid else None,
+            "source": json.loads(t["source"]) if t["source"] else None,
+            "attempts": [{"id": a["id"], "started_at": a["started"], "ended_at": a["ended"], "backend": t["agent"],
+                          "state": "RUNNING" if a["status"] == "running" else (a["outcome"] or "RUNNING"),
+                          "memory_bytes": memory_bytes(a["unit"]) if a["status"] == "running" else None}
+                         for a in c["attempts"].get(tid, [])],
+            "instructions": [{"version": i + 1, "text": json.loads(e["data"])["text"], "time": e["at"]}
+                             for i, e in enumerate(c["instr"].get(tid, []))],
+            "created_at": t["created"], "updated_at": max(t["updated"], c["touched"].get(tid, 0)),
+        }
+
+    def event(self, r, projects, full):
+        d = json.loads(r["data"])
+        e = {"schema_version": 1, "seq": r["id"], "type": KINDS.get(r["kind"], r["kind"].upper()),
+             "task_id": str(r["task"]) if r["task"] else None, "project_id": projects.get(r["task"]),
+             "attempt_id": r["attempt"], "time": r["at"], "producer": "runtime", "message": message(r["kind"], d)}
+        if full and "tail" in d:
+            e["output"] = d["tail"]
+        return e
+
+    def snapshot(self, cursor=0):
+        s, c = self.store, self.context()
+        slots = self.rt.cfg["slots"]
+        proj_of = {t["id"]: t["project"] for t in c["rows"]}
         evs = list(s.q("select * from events where id > ? order by id limit 300", cursor))
-        events = []
-        for r in evs:
-            d = json.loads(r["data"])
-            events.append({"schema_version": 1, "seq": r["id"], "type": KINDS.get(r["kind"], r["kind"].upper()),
-                           "task_id": str(r["task"]) if r["task"] else None, "project_id": proj_of.get(str(r["task"])),
-                           "attempt_id": r["attempt"], "time": r["at"], "producer": "runtime",
-                           "message": message(r["kind"], d), **({"output": d["tail"]} if "tail" in d else {})})
         last = s.one("select coalesce(max(id), 0) m from events")["m"]
-        names = ("fake", "codex", "claude")
-        return {"schema_version": 1, "mode": "real", "paused": paused, "projects": self.projects(),
-                "tasks": tasks, "events": events, "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
-                "agents": self.agents(busy, cool),
-                "resources": {"slots": [{"backend": n, "used": busy.get(n, 0), "limit": slots.get(n, 1)} for n in names],
-                              "memory_available": False, "mode": "real"},
-                "capabilities": {"fake": "scripted, sandboxed", "codex": "unverified", "claude": "unverified", "local": "not connected"},
-                "settings": [["Mode", "Real runtime / each attempt runs in bwrap + cgroup"],
-                             ["State", str(runtime.data_dir())], ["Projects", str(runtime.config_dir() / "projects")],
-                             ["Slots", ", ".join(f"{k} {v}" for k, v in slots.items())],
-                             ["Agent logins", f"CODEX_HOME / CLAUDE_CONFIG_DIR under {runtime.data_dir() / 'agents'}"],
-                             ["Transport", "Authenticated HTTP / 127.0.0.1 only"], ["Remote listener", "Disabled"],
-                             ["Push / merge / deploy", "No runtime endpoints; results land in refs/navis/attempts/*"]]}
+        names = [p[0] for p in PROVIDERS]
+        return {"schema_version": 1, "mode": "real", "paused": c["paused"], "projects": self.projects(),
+                "tasks": [self.task_view(t, c, False) for t in c["rows"]],
+                "events": [self.event(r, proj_of, False) for r in evs],
+                "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
+                "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
+                "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
+                              "memory_available": True, "mode": "real"},
+                "capabilities": {"fake": "scripted, sandboxed", "codex": "unverified", "claude": "unverified", "local": "not connected",
+                                 "controls": {"graceful_stop": False},
+                                 "handoff": {"claude_review": self.logged_in("claude"), "codex_continue": self.logged_in("codex")}}}
+
+    def task_detail(self, task_id):
+        c = self.context()
+        t = next((t for t in c["rows"] if str(t["id"]) == str(task_id)), None)
+        if not t:
+            raise ControlError("Task not found")
+        proj_of = {t["id"]: t["project"] for t in c["rows"]}
+        rows = self.store.q("select * from events where task = ? order by id", t["id"])
+        return {"task": self.task_view(t, c, True), "events": [self.event(r, proj_of, True) for r in rows]}
 
     # Commands
 
@@ -214,7 +280,9 @@ class Bridge:
             runtime.set_paused(s, action == "pause")
             return {"ok": True}
         if action == "create_project":
-            raise ControlError("Projects are TOML files in ~/.config/navis/projects/")
+            return self.create_project(p)
+        if action == "update_settings":
+            return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
         try:
@@ -228,31 +296,44 @@ class Bridge:
         aid = last["id"] if last else None
         if p.get("attempt_id") != aid:
             raise ControlError("Attempt changed. Refresh before controlling this task.")
-        st = t["status"]
-        ok = False
+        st, ok, out = t["status"], False, {"ok": True}
         if action in ("stop", "kill"):
             if st in DONE:
                 raise ControlError("This task is already inactive")
-            if action == "kill" and st != "RUNNING":
-                raise ControlError("No running attempt")
-            runtime.stop_task(s, tid)
+            runtime.stop_task(s, tid)  # no graceful stop yet: the attempt's process tree is killed at once
             ok = True
         elif action == "retry":
             ok = runtime.retry(s, tid) if st in ("FAILED", "CANCELLED") else False
         elif action == "instruction":
             ok = runtime.instruct(s, tid, clean_text(p.get("text"), "Instruction", 2000))
         elif action in ("approve", "reject", "answer"):
-            if p.get("pending_id") != f"{tid}:{aid}:{st}":
+            if st != "REVIEW" and p.get("pending_id") != f"{tid}:{aid}:{st}":
                 raise ControlError("Request changed or has already been resolved")
             if action == "answer":
                 ok = st == "WAITING_INPUT" and runtime.answer(s, tid, clean_text(p.get("text"), "Answer", 2000))
             elif st in ("WAITING_APPROVAL", "REVIEW"):
                 ok = (runtime.approve if action == "approve" else runtime.reject)(s, tid)
+        elif action in ("review_with_claude", "continue_with_codex"):
+            out = self.hand_off(t, aid, "claude" if action == "review_with_claude" else "codex")
+            ok = True
         else:
             raise ControlError("Unknown command")
         if not ok:
             raise ControlError(f"{action} is not possible while the task is {st}")
-        return {"ok": True}
+        return out
+
+    def hand_off(self, t, aid, agent):
+        if t["status"] != "COMPLETED" or not t["head"]:
+            raise ControlError("Only a completed task with a result can be handed off")
+        if not self.logged_in(agent):
+            raise ControlError(f"{agent} is not logged in")
+        title = t["title"] or t["spec"][:60]
+        spec = (f"Review the changes from task {t['id']} ({title}). Check correctness and edge cases, fix real problems, "
+                "and report what you found." if agent == "claude" else
+                f"Continue the work from task {t['id']} ({title}): finish anything incomplete and keep to the scope.")
+        return self.create_task({"project_id": t["project"], "title": f"{'Review' if agent == 'claude' else 'Continue'}: {title}"[:120],
+                                 "spec": spec, "scope": ",".join(json.loads(t["scope"])), "agent": agent,
+                                 "source_task_id": str(t["id"]), "source_attempt_id": aid})
 
     def create_task(self, p):
         project = p.get("project_id")
@@ -260,7 +341,8 @@ class Bridge:
             raise ControlError("Unknown project")
         base, source = p.get("base") or "HEAD", None
         if p.get("source_task_id"):
-            old = self.store.one("select * from tasks where id = ?", str(p["source_task_id"]).strip() if str(p["source_task_id"]).isdigit() else -1)
+            sid = str(p["source_task_id"])
+            old = self.store.one("select * from tasks where id = ?", int(sid)) if sid.isdigit() else None
             last = old and self.store.one("select id from attempts where task = ? order by started desc limit 1", old["id"])
             if not old or old["project"] != project or old["status"] != "COMPLETED" or not old["head"]:
                 raise ControlError("Source must be a completed task in the same project")
@@ -278,3 +360,49 @@ class Bridge:
         except (ValueError, subprocess.CalledProcessError) as e:
             raise ControlError(f"Cannot queue task: {e}"[:300])
         return {"task_id": str(dup or tid), "duplicate": bool(dup)}
+
+    def create_project(self, p):
+        name = clean_text(p.get("name"), "Name", 60)
+        if not NAME_RE.match(name):
+            raise ControlError("Name may use letters, digits, '.', '_' and '-' only")
+        path = Path(os.path.expanduser(clean_text(p.get("path"), "Repository path", 1000))).resolve()
+        top = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], capture_output=True, text=True) if path.is_dir() else None
+        if not top or top.returncode or Path(top.stdout.strip()).resolve() != path:
+            raise ControlError("Path must be the root of a Git repository")
+        data = runtime.data_dir().resolve()
+        if path == data or data in path.parents or path in data.parents:
+            raise ControlError("Path overlaps Navis' own data directory")
+        f = runtime.config_dir() / "projects" / f"{name}.toml"
+        if f.exists():
+            raise ControlError("A project with this name already exists")
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"path = {json.dumps(str(path))}\nprotected = []\n\n[checks]\n# Add checks here, e.g. unit = \"python3 -m unittest\".\n"
+                     "# With no checks a finished task is not verified by anything.\n")
+        return {"id": name}
+
+    def update_settings(self, values):
+        if not isinstance(values, dict):
+            raise ControlError("Settings must be an object")
+        known = {k: (lo, hi) for k, _, lo, hi in SETTINGS}
+        if set(values) - set(known):
+            raise ControlError("Unknown setting")
+        new = {}
+        for k, raw in values.items():
+            try:
+                v = int(str(raw))
+            except ValueError:
+                raise ControlError(f"{k} must be a whole number")
+            if not known[k][0] <= v <= known[k][1]:
+                raise ControlError(f"{k} must be between {known[k][0]} and {known[k][1]}")
+            new[k] = v
+        f = runtime.config_dir() / "config.toml"
+        cfg = tomllib.loads(f.read_text()) if f.exists() else {}
+        for k, v in new.items():
+            sec, key = k.split(".")
+            cfg.setdefault(sec, {})[key] = v
+            self.rt.cfg[sec][key] = v
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(dump_toml(cfg))
+        tmp.replace(f)
+        return {"ok": True}
