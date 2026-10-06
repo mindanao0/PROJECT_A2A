@@ -4,7 +4,7 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'
 let token = new URLSearchParams(location.hash.slice(1)).get('token') || '';
 history.replaceState(null, '', location.pathname);
 let snapshot = null, cursor = 0, events = [], view = 'overview', project = 'all', search = '', stateFilter = 'all';
-let connected = false, selectedTask = null, detailTab = 'results', detailSignature = '', polling = false, toastTimer;
+let connected = false, selectedTask = null, taskDetail = null, detailTab = 'results', detailSignature = '', polling = false, toastTimer;
 let eventTask = 'all', eventType = 'all', eventLimit = 100, confirmPending = false;
 const columnLimits = [12,12,12,12];
 const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings'};
@@ -15,10 +15,10 @@ const shortID = id => (id || 'Not assigned').slice(-6).toUpperCase();
 const badge = state => `<span class="badge ${escapeHTML(state.toLowerCase().replaceAll('_','-'))}">${escapeHTML(state.replaceAll('_',' '))}</span>`;
 const date = t => new Date(t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
 const simulation = () => snapshot?.mode !== 'real';
-const currentTask = () => snapshot?.tasks.find(t => t.id === selectedTask);
+const currentTask = () => taskDetail?.task?.id === selectedTask ? taskDetail.task : snapshot?.tasks.find(t => t.id === selectedTask);
 
 function toast(message) {
-  $('#toast').textContent = message; $('#toast').hidden = false;
+  $('#toast').textContent = message; $('#toast').hidden = false; $('#announcer').textContent=message;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 4200);
 }
 async function api(path, body) {
@@ -57,9 +57,17 @@ async function poll() {
     snapshot = result; connected = true;
     $('#connection-alert').hidden = true; $('#local-connection').textContent = 'Connected';
     $('#pause').disabled = false; $('#new-task').disabled = false;
-    $('#add-project').hidden = !simulation(); $('#add-project').disabled = false;
+    $('#add-project').hidden = false; $('#add-project').disabled = false;
+    $('#runtime-banner').classList.toggle('real-mode',!simulation());
+    $('#runtime-banner').innerHTML = simulation()
+      ? '<span class="notice-icon" aria-hidden="true">◌</span><div><strong>Simulation workspace</strong><span>Fake-agent controls only. No repository files are changed.</span></div><span class="notice-badge">SIMULATION / 0.1</span>'
+      : '<span class="notice-icon" aria-hidden="true">⌁</span><div><strong>Real runtime</strong><span>Controls and capabilities are provided by the active runner. Verify the task, attempt and diff before approval.</span></div><span class="notice-badge">REAL MODE</span>';
     if (changed || view === 'activity') render();
-    if (selectedTask) updateDetail();
+    if (selectedTask) {
+      const summary=result.tasks.find(t=>t.id===selectedTask);
+      if (summary && taskDetail?.task?.updated_at===summary.updated_at) updateDetail();
+      else await loadTaskDetail(selectedTask);
+    }
     updateCountdowns();
   } catch (err) {
     connected = false; $('#local-connection').textContent = 'Disconnected';
@@ -121,9 +129,19 @@ function fakeAgentRow() {
 function agentPanel() {
   return `<section class="panel"><div class="panel-header"><h2>Agent fleet</h2><button class="text-button" data-view="agents">View agents ↗</button></div>${fakeAgentRow()}${agentRow('Codex','CLI adapter / feasibility pending','✳','Not tested','','Disabled')}${agentRow('Claude Code','CLI adapter / feasibility pending','✽','Not tested','','Disabled')}${agentRow('Local LLM','Context summaries and log analysis','⌘','Not connected','','No write / exec tools')}</section>`;
 }
-function eventList(limit=8, taskFilter='all', typeFilter='all') {
-  const relevant = events.filter(e=>(project==='all'||e.project_id===project)&&(taskFilter==='all'||e.task_id===taskFilter)&&(typeFilter==='all'||e.type===typeFilter)).slice(-limit).reverse();
-  return relevant.length ? `<div class="timeline">${relevant.map(e=>`<div class="event-row"><span class="event-mark" aria-hidden="true">${e.type==='STATE'?'↗':e.type==='CONTROL'?'Ⅱ':'◇'}</span><div class="event-body"><p>${escapeHTML(e.message)}</p><small>${escapeHTML(e.type)} / ${e.task_id?'NAV-'+escapeHTML(shortID(e.task_id)):'Runtime'} / #${e.seq}</small>${e.task_id?`<button class="text-button" data-task="${escapeHTML(e.task_id)}">Open task</button>`:''}${typeof e.output==='string'?`<details><summary>Full event output</summary><pre>${escapeHTML(e.output)}</pre></details>`:''}</div><span class="event-time">${date(e.time)}</span></div>`).join('')}</div>` : empty('No matching events','Events retained in the current browser session appear here. Earlier events remain in the database.','≋');
+function eventList(limit=8, taskFilter='all', typeFilter='all', sourceEvents=events) {
+  const relevant = sourceEvents.filter(e=>(project==='all'||e.project_id===project)&&(taskFilter==='all'||e.task_id===taskFilter)&&(typeFilter==='all'||e.type===typeFilter)).slice(-limit).reverse();
+  return relevant.length ? `<div class="timeline">${relevant.map(e=>`<div class="event-row"><span class="event-mark" aria-hidden="true">${e.type==='STATE'?'↗':e.type==='CONTROL'?'Ⅱ':'◇'}</span><div class="event-body"><p>${escapeHTML(e.message)}</p><small>${escapeHTML(e.type)} / ${e.task_id?'NAV-'+escapeHTML(shortID(e.task_id)):'Runtime'} / #${e.seq}</small>${e.task_id?`<button class="text-button" data-task="${escapeHTML(e.task_id)}" data-open-output>Open task output ↗</button>`:''}${typeof e.output==='string'?`<details><summary>Full event output</summary><pre>${escapeHTML(e.output)}</pre></details>`:''}</div><span class="event-time">${date(e.time)}</span></div>`).join('')}</div>` : empty('No matching events','Events retained in the current browser session appear here. Earlier events remain in the database.','≋');
+}
+async function loadTaskDetail(taskID) {
+  if (!connected || !taskID) return;
+  try {
+    const result = await api(`/api/tasks/${encodeURIComponent(taskID)}`);
+    if (selectedTask !== taskID) return;
+    taskDetail = result; detailSignature = ''; updateDetail();
+  } catch (err) {
+    if (selectedTask === taskID) toast(`Task evidence unavailable: ${err.message}`);
+  }
 }
 function eventToolbar(tasks) {
   return `<div class="event-toolbar"><label>Task<select id="event-task"><option value="all">All tasks and runtime</option>${tasks.map(t=>`<option value="${escapeHTML(t.id)}" ${eventTask===t.id?'selected':''}>${escapeHTML(t.title)}</option>`).join('')}</select></label><label>Event type<select id="event-type"><option value="all">All event types</option>${[...new Set(events.map(e=>e.type))].sort().map(type=>`<option ${eventType===type?'selected':''}>${escapeHTML(type)}</option>`).join('')}</select></label></div>`;
@@ -133,12 +151,25 @@ function artifactBlock(artifact, task, expanded=false) {
 }
 function artifacts(tasks) {
   const items = tasks.flatMap(t=>t.artifacts.map(a=>({artifact:a,task:t})));
-  return items.length ? `<div class="artifacts">${items.map(({artifact,task})=>`<section class="panel artifact"><button class="text-button" data-task="${escapeHTML(task.id)}">${escapeHTML(task.title)} ↗</button>${artifactBlock(artifact,task)}</section>`).join('')}</div>` : `<section class="panel">${empty('No artifacts yet','Completed steps produce result and verification evidence.','◇')}</section>`;
+  return items.length ? `<div class="artifacts">${items.map(({artifact,task})=>`<section class="panel artifact"><button class="text-button" data-task="${escapeHTML(task.id)}">${escapeHTML(task.title)} ↗</button><h3>${escapeHTML(artifact.name)}</h3><small>${escapeHTML(artifact.kind)} / attempt ${escapeHTML(artifact.attempt_id)} / ${escapeHTML(artifact.hash||'hash unavailable')}</small><p class="muted">Full content loads when you open this task.</p><button class="button secondary" data-task="${escapeHTML(task.id)}">Open artifact →</button></section>`).join('')}</div>` : `<section class="panel">${empty('No artifacts yet','Completed steps produce result and verification evidence.','◇')}</section>`;
+}
+function formatBytes(bytes) {
+  if (!Number.isFinite(Number(bytes)) || Number(bytes)<0) return 'Not measured';
+  const units=['B','KiB','MiB','GiB']; let value=Number(bytes), index=0;
+  while(value>=1024&&index<units.length-1){value/=1024;index++;}
+  return `${value.toFixed(index?1:0)} ${units[index]}`;
 }
 function resourcePanel() {
   const slots = snapshot.resources?.slots || [];
   const attempts = filteredTasks().filter(t=>active.includes(t.state));
-  return `<section class="panel"><div class="panel-header"><h2>Dispatch capacity</h2><span class="badge">${simulation()?'SIMULATION':'RUNTIME'}</span></div><dl class="settings-list">${slots.map(s=>`<div><dt>${escapeHTML(s.backend)} slots</dt><dd>${s.used} / ${s.limit}</dd></div>`).join('')||'<div><dt>Slots</dt><dd>Not reported by runtime</dd></div>'}<div><dt>Dispatch</dt><dd>${snapshot.paused?'Paused':'Enabled'}</dd></div><div><dt>Attempt RAM</dt><dd>Not measured in this implementation</dd></div></dl><div class="detail-section"><h3>Active attempts</h3>${attempts.length?`<div class="table-scroll"><table class="resource-table"><thead><tr><th scope="col">Task</th><th scope="col">Attempt</th><th scope="col">Agent</th><th scope="col">Memory</th></tr></thead><tbody>${attempts.map(t=>`<tr><td><button class="text-button" data-task="${escapeHTML(t.id)}">${escapeHTML(t.title)}</button></td><td>${escapeHTML(t.attempt_id)}</td><td>${escapeHTML(t.backend)}</td><td>Not measured</td></tr>`).join('')}</tbody></table></div>`:empty('No active attempts','Dispatch capacity is available when the runtime is not paused.')}</div><p class="muted">${simulation()?'The fake agent runs inside the runtime. It has no separate worker process or per-attempt RAM sample.':'RAM telemetry requires a runtime implementation that supplies measured samples.'}</p></section>`;
+  const memoryFor=t=>{const attempt=t.attempts.find(a=>a.id===t.attempt_id);return attempt?.memory_bytes??snapshot.resources?.attempt_memory_bytes?.[t.attempt_id]??null;};
+  const sampled=attempts.filter(t=>memoryFor(t)!==null).length;
+  return `<section class="panel"><div class="panel-header"><h2>Dispatch capacity</h2><span class="badge">${simulation()?'SIMULATION':'RUNTIME'}</span></div><dl class="settings-list">${slots.map(s=>`<div><dt>${escapeHTML(s.backend)} slots</dt><dd>${escapeHTML(s.used)} / ${escapeHTML(s.limit)}</dd></div>`).join('')||'<div><dt>Slots</dt><dd>Not reported by runtime</dd></div>'}<div><dt>Dispatch</dt><dd>${snapshot.paused?'Paused':'Enabled'}</dd></div><div><dt>Attempt RAM</dt><dd>${sampled} of ${attempts.length} active attempts measured</dd></div></dl><div class="detail-section"><h3>Active attempts</h3>${attempts.length?`<div class="table-scroll"><table class="resource-table"><thead><tr><th scope="col">Task</th><th scope="col">Attempt</th><th scope="col">Agent</th><th scope="col">Memory</th></tr></thead><tbody>${attempts.map(t=>`<tr><td><button class="text-button" data-task="${escapeHTML(t.id)}">${escapeHTML(t.title)}</button></td><td>${escapeHTML(t.attempt_id)}</td><td>${escapeHTML(t.backend)}</td><td>${escapeHTML(formatBytes(memoryFor(t)))}</td></tr>`).join('')}</tbody></table></div>`:empty('No active attempts','Dispatch capacity is available when the runtime is not paused.')}</div><p class="muted">${simulation()?'The fake agent has no separate worker process or per-attempt RAM sample.':'RAM values are shown only when the runtime supplies measured memory_bytes.'}</p></section>`;
+}
+function settingsPanel() {
+  const settings=snapshot.settings;
+  if (!settings?.editable || !Array.isArray(settings.items)) return `<section class="panel"><h2>Runtime settings</h2><p class="muted">${simulation()?'The simulation uses one fixed slot.':'Settings are read-only until the runtime exposes editable settings.'}</p><dl class="settings-list">${[['Mode',simulation()?'Simulation only':'Real'],['Transport','Authenticated loopback'],['Remote listener','Disabled'],['Dispatch',snapshot.paused?'Paused':'Enabled']].map(([k,v])=>`<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl></section>`;
+  return `<section class="panel"><h2>Runtime settings</h2><form id="settings-form">${settings.items.map(x=>`<label>${escapeHTML(x.label)}<input name="${escapeHTML(x.key)}" type="${x.type==='number'?'number':'text'}" value="${escapeHTML(x.value)}" ${Number.isFinite(x.min)?`min="${x.min}"`:''} ${Number.isFinite(x.max)?`max="${x.max}"`:''} ${x.required?'required':''}></label>`).join('')}<p class="form-error" role="alert"></p><button class="button primary" type="submit">Save runtime settings</button></form></section>`;
 }
 function rememberFocus() {
   const element = document.activeElement;
@@ -158,7 +189,7 @@ function render() {
   document.querySelectorAll('.sidebar .nav-item').forEach(b=>{b.classList.toggle('active',b.dataset.view===view);if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
   $('#pause').textContent = snapshot.paused?'▷ Resume dispatch':'Ⅱ Pause dispatch';
   $('#nav-task-count').textContent = snapshot.tasks.length;
-  $('#add-project').hidden = !simulation();
+  $('#add-project').hidden = false;
   $('#project-list').innerHTML = `<button id="project-all" class="project-item ${project==='all'?'active':''}" data-project="all"><span class="project-dot" aria-hidden="true"></span><span>All projects</span></button>`+snapshot.projects.map(p=>`<button id="project-${escapeHTML(p.id)}" class="project-item ${project===p.id?'active':''}" data-project="${escapeHTML(p.id)}"><span class="project-dot" aria-hidden="true"></span><span>${escapeHTML(p.name)}</span></button>`).join('');
   const tasks = filteredTasks(); let html = '';
   if (view==='overview'||view==='tasks') {
@@ -170,11 +201,13 @@ function render() {
     html += board(tasks);
     if (view==='overview') html += `<div class="lower-grid">${agentPanel()}<section class="panel"><div class="panel-header"><h2>Recent activity</h2><button class="text-button" data-view="activity">View audit log ↗</button></div>${eventList()}</section></div>`;
   } else if (view==='agents') {
-    html = `<div class="agent-grid"><section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>${[['Codex','✳','Provider CLI/session'],['Claude Code','✽','Provider CLI/session'],['Local LLM','⌘','Text summaries and log analysis']].map(([name,mark,desc])=>`<section class="panel agent-card">${agentRow(name,desc,mark,'Unavailable','','Not implemented')}<div class="capability-list"><span class="capability">Capability unknown</span><span class="capability">Execution disabled</span></div><p>Provider cooldown, output logs and agent handoff require the real adapter. No credentials are requested here.</p></section>`).join('')}</div>`;
+    const providers=snapshot.providers||[];
+    const providerCard=([name,mark,desc],provider)=>{const until=provider?.cooldown_until;const reported=provider?.status||(until?'Cooldown':'Unavailable');const state=['Ready','Busy','Cooldown','Unavailable','Not tested','Not connected','Error'].includes(reported)?reported:'Unavailable';const slotText=provider?.slot_limit!=null?`${provider.slots_used||0} / ${provider.slot_limit} slots`:provider?.reason||'No runtime status';const sub=`${escapeHTML(slotText)}${until?`<br>${timer(Number(until))}`:''}`;return `<section class="panel agent-card">${agentRow(name,desc,mark,state,state==='Ready'?'ready':state==='Cooldown'?'cooldown':'',sub)}<div class="capability-list"><span class="capability">${escapeHTML(provider?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(provider?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;};
+    html = `<div class="agent-grid"><section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>${[['Codex','✳','Provider CLI/session'],['Claude Code','✽','Provider CLI/session'],['Local LLM','⌘','Text summaries and log analysis']].map((entry,i)=>{const key=['codex','claude','local'][i], provider=providers.find(p=>p.id===key||p.name?.toLowerCase().replace(/ code/,'').replace(/ llm/,'')===entry[0].toLowerCase());return providerCard(entry,provider);}).join('')}</div>`;
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
   else if (view==='artifacts') html = artifacts(tasks);
   else if (view==='resources') html = resourcePanel();
-  else html = `<section class="panel"><h2>Runtime boundary</h2><dl class="settings-list">${[['Mode',simulation()?'Simulation only':'Real'],['Core','Python 3.11+ / standard library'],['State','SQLite / atomic state + events'],['Transport','Authenticated HTTP / 127.0.0.1 only'],['Browser session','HttpOnly session cookie / refresh survives'],['Restart','New launch token and session / reopen launch.url'],['Notifications','Tab title always / browser notification opt-in'],['Remote listener','Disabled'],['Dispatch',snapshot.paused?'Paused / active attempt continues':'Enabled / 1 fake-agent slot'],['Restart recovery','Active attempts revoked → BLOCKED'],['Provider CLI / local inference','Not implemented'],['Workspace / sandbox / cgroups','Not implemented / no real execution'],['Push / merge / deploy','No runtime endpoints'],['Diff / agent.log / actual provider prompt','Awaiting real runner'],['Source tasks','Completed task artifacts / simulation only']].map(([a,b])=>`<div><dt>${escapeHTML(a)}</dt><dd>${escapeHTML(b)}</dd></div>`).join('')}</dl></section>`;
+  else html = settingsPanel();
   $('#content').innerHTML = html; restoreFocus(focus); updateAttention(null,snapshot); updateCountdowns();
 }
 function populateSources(selected='') {
@@ -197,7 +230,7 @@ function detailPanel(task) {
   if (detailTab==='diff') return renderDiff(task);
   if (detailTab==='log') {
     const logs = task.artifacts.filter(a=>a.kind==='agent_log');
-    return logs.length ? logs.map(a=>artifactBlock(a,task,true)).join('') : `${empty('Agent output is unavailable','There is no real agent.log in this version. The full runtime messages for this task are shown below.','≋')}${eventList(1000,task.id)}`;
+    return (logs.length ? logs.map(a=>artifactBlock(a,task,true)).join('') : empty('Agent output is unavailable','There is no real agent.log in this version. Runtime event output is shown below.','≋'))+eventList(1000,task.id,'all',taskDetail?.events||events);
   }
   if (detailTab==='prompt') {
     const prompts = task.artifacts.filter(a=>a.kind==='prompt');
@@ -215,15 +248,29 @@ function updateDetail(force=false) {
   const disclosureState = [...$('#task-detail').querySelectorAll('details')].map(el=>el.open);
   detailSignature = signature;
   const controls = [];
-  if (!terminal.includes(task.state)) controls.push('<button class="button secondary" data-action="stop">■ Stop</button>');
-  if (active.includes(task.state)) controls.push(`<button class="button danger" data-action="kill">${simulation()?'Kill simulation':'Kill process tree'}</button>`);
+  const gracefulStop=simulation()||snapshot.capabilities?.controls?.graceful_stop===true;
+  if (!terminal.includes(task.state)) {
+    if (gracefulStop) controls.push('<button class="button secondary" data-action="stop">■ Stop gracefully</button>');
+    else if (active.includes(task.state)) controls.push('<button class="button danger" data-action="kill">Terminate attempt</button>');
+    else controls.push('<button class="button secondary" data-action="stop">Cancel queued task</button>');
+  }
+  if (active.includes(task.state)&&gracefulStop) controls.push(`<button class="button danger" data-action="kill">${simulation()?'Kill simulation':'Force kill process tree'}</button>`);
   if (['FAILED','CANCELLED','BLOCKED'].includes(task.state)) controls.push('<button class="button primary" data-action="retry">↻ Retry as new attempt</button>');
-  if (task.state==='COMPLETED') controls.push(`<button class="button primary" data-continue="${escapeHTML(task.id)}">Continue from this task →</button><button class="button secondary" disabled>Review with Claude / unavailable</button><button class="button secondary" disabled>Continue with Codex / unavailable</button>`);
+  if (task.state==='COMPLETED') {
+    controls.push(`<button class="button primary" data-continue="${escapeHTML(task.id)}">Continue from this task →</button>`);
+    const handoff=snapshot.capabilities?.handoff||{};
+    controls.push(`<button class="button secondary" data-action="review_with_claude" ${handoff.claude_review===true?'':'disabled title="Claude review is unavailable until the runtime reports a logged-in adapter."'}>Review with Claude</button>`);
+    controls.push(`<button class="button secondary" data-action="continue_with_codex" ${handoff.codex_continue===true?'':'disabled title="Codex continuation is unavailable until the runtime reports a logged-in adapter."'}>Continue with Codex</button>`);
+  }
   if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
   let request = '';
   if (task.pending) request = `<section class="request-box"><h3>${task.state==='WAITING_APPROVAL'?'Approval required':'Your input is needed'}</h3><p>${escapeHTML(task.pending.message)}</p><small>Expires at ${date(task.pending.expires)} / bound to the displayed attempt</small>${task.state==='WAITING_APPROVAL'?`<div class="detail-actions"><button class="button primary" data-action="approve">${simulation()?'Approve simulation':'Approve request'}</button><button class="button danger" data-action="reject">Reject</button></div>`:'<form id="answer-form"><label>Your answer<textarea id="task-answer" name="answer" required maxlength="2000" rows="2"></textarea></label><button class="button primary" type="submit">Send answer →</button></form>'}</section>`;
+  else if (task.state==='REVIEW') request = `<section class="request-box"><h3>Approve reviewed attempt</h3><p>The runner has not supplied a separate approval question. Review the diff and verification evidence above before approving.</p><div class="detail-actions"><button class="button primary" data-action="approve">Approve attempt</button><button class="button danger" data-action="reject">Reject attempt</button></div></section>`;
+  else if (task.state==='WAITING_INPUT') request = `<section class="request-box"><h3>Waiting for your input</h3><p>The runtime has not supplied the input prompt yet. Refresh the task details or inspect its event output.</p><button class="text-button" data-open-output data-task="${escapeHTML(task.id)}">Open task output ↗</button></section>`;
   const reasons = task.queue_reasons || [];
-  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div><p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div><div><span>Scenario</span>${escapeHTML(task.scenario)}</div></div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="group" aria-label="Task evidence">${[['results','Results'],['diff','Code diff'],['log','Agent output'],['prompt','Prompt / instructions'],['attempts','Attempts']].map(([id,label])=>`<button id="detail-tab-${id}" class="detail-tab" data-detail-tab="${id}" aria-pressed="${detailTab===id}">${label}</button>`).join('')}</div><section aria-label="${escapeHTML(detailTab)}">${detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next simulated step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
+  const tabLabels=[['results','Results'],['diff','Code diff'],['log','Agent output'],['prompt','Prompt / instructions'],['attempts','Attempts']];
+  const activeLabel=tabLabels.find(([id])=>id===detailTab)?.[1]||'Results';
+  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div><div><span>Scenario</span>${escapeHTML(task.scenario)}</div></div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
   $('#task-detail').querySelectorAll('textarea').forEach(el=>{if(saved[el.name])el.value=saved[el.name];});
   if (!force) $('#task-detail').querySelectorAll('details').forEach((el,i)=>{if(i<disclosureState.length)el.open=disclosureState[i];});
   if (!connected) $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
@@ -254,11 +301,11 @@ document.addEventListener('click',async e=>{
   const more = e.target.closest('[data-more-column]'); if (more) {columnLimits[Number(more.dataset.moreColumn)]+=12;render();return;}
   if (e.target.closest('#more-events')) {eventLimit=Math.min(1000,eventLimit+100);render();return;}
   const tab = e.target.closest('[data-detail-tab]'); if (tab) {detailTab=tab.dataset.detailTab;updateDetail(true);return;}
-  const copy = e.target.closest('[data-copy-artifact]'); if (copy) {const task=snapshot.tasks.find(t=>t.id===copy.dataset.copyTask);const artifact=task?.artifacts.find(a=>a.id===copy.dataset.copyArtifact);if(artifact)await copyText(artifact.content);return;}
+  const copy = e.target.closest('[data-copy-artifact]'); if (copy) {const task=taskDetail?.task?.id===copy.dataset.copyTask?taskDetail.task:snapshot.tasks.find(t=>t.id===copy.dataset.copyTask);const artifact=task?.artifacts.find(a=>a.id===copy.dataset.copyArtifact);if(artifact?.content!==undefined)await copyText(artifact.content);return;}
   if(e.target.closest('[data-copy-merge]')) {const task=currentTask();if(task&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..'))await copyText(`git merge -- ${task.result_ref}`);return;}
   const follow = e.target.closest('[data-continue]'); if (follow) {const source=snapshot.tasks.find(t=>t.id===follow.dataset.continue);if(connected&&source){$('#detail-dialog').close();openTaskForm(source);}return;}
   if (e.target.closest('[data-new-task]')||e.target.closest('#new-task')) {if(connected)openTaskForm();return;}
-  const taskButton = e.target.closest('[data-task]'); if (taskButton) {selectedTask=taskButton.dataset.task;detailTab='results';detailSignature='';updateDetail(true);if(!$('#detail-dialog').open)$('#detail-dialog').showModal();return;}
+  const taskButton = e.target.closest('[data-task]'); if (taskButton) {selectedTask=taskButton.dataset.task;taskDetail=null;const summary=snapshot.tasks.find(t=>t.id===selectedTask);detailTab=taskButton.hasAttribute('data-open-output')?'log':summary?.state==='REVIEW'?'diff':'results';detailSignature='';updateDetail(true);if(!$('#detail-dialog').open)$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);return;}
   const control = e.target.closest('[data-action]');
   if (control) {
     const task = currentTask(); if (!task||!connected) return;
@@ -271,8 +318,8 @@ document.addEventListener('click',async e=>{
     control.disabled = false;
   }
 });
-$('#detail-dialog').addEventListener('close',()=>{selectedTask=null;detailSignature='';});
-$('#add-project').onclick = ()=>{if(!connected||!simulation())return;$('#project-form').reset();$('#project-form .form-error').textContent='';$('#project-dialog').showModal();};
+$('#detail-dialog').addEventListener('close',()=>{selectedTask=null;taskDetail=null;detailSignature='';});
+$('#add-project').onclick = ()=>{if(!connected)return;$('#project-form').reset();$('#project-form .form-error').textContent='';$('#project-description').textContent=simulation()?'Creates a simulation-only project.':'Add a project through the active runtime. Repository access is granted only by that runtime.';$('#project-path-field').hidden=simulation();$('#project-dialog').showModal();};
 $('#refresh').onclick = ()=>poll();
 $('#pause').onclick = async ()=>{if(!snapshot)return;const result=await command({action:snapshot.paused?'resume':'pause'});if(result)toast(snapshot.paused?'Dispatch paused. Active attempts continue.':'Dispatch resumed.');};
 $('#notifications').hidden = !('Notification' in window);
@@ -287,15 +334,23 @@ $('#task-form').onsubmit = async e=>{
   const form=e.currentTarget, button=form.querySelector('[type="submit"]');button.disabled=true;
   const fields=Object.fromEntries(new FormData(form));
   if(fields.source_task_id)fields.source_attempt_id=$('#task-source').selectedOptions[0]?.dataset.attempt;
-  try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':'Task queued for simulation.');selectedTask=result.task_id;detailTab='results';updateDetail(true);$('#detail-dialog').showModal();}
+  try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':'Task queued for simulation.');selectedTask=result.task_id;taskDetail=null;detailTab='results';updateDetail(true);$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);}
   catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}
 };
 $('#project-form').onsubmit = async e=>{
-  e.preventDefault();if(!connected||!simulation())return;
+  e.preventDefault();if(!connected)return;
   const form=e.currentTarget,button=form.querySelector('[type="submit"]');button.disabled=true;
-  try{const result=await api('/api/command',{action:'create_project',name:new FormData(form).get('name')});project=result.id;$('#project-dialog').close();await poll();toast('Simulation project added.');}
+  try{const fields=Object.fromEntries(new FormData(form));const result=await api('/api/command',{action:'create_project',...fields});project=result.id;$('#project-dialog').close();await poll();toast(simulation()?'Simulation project added.':'Project added by runtime.');}
   catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}
 };
+$('#content').addEventListener('submit',async e=>{
+  if(e.target.id!=='settings-form')return;
+  e.preventDefault();if(!connected)return;
+  const form=e.target,button=form.querySelector('[type="submit"]');button.disabled=true;
+  try{await api('/api/command',{action:'update_settings',values:Object.fromEntries(new FormData(form))});await poll();toast('Runtime settings saved.');}
+  catch(err){form.querySelector('.form-error').textContent=err.message;}
+  finally{button.disabled=false;}
+});
 $('#task-detail').addEventListener('submit',async e=>{
   e.preventDefault();const form=e.target,button=form.querySelector('[type="submit"]');if(!button)return;
   button.disabled=true;const task=currentTask();if(!task)return;
@@ -308,6 +363,12 @@ $('#content').addEventListener('change',e=>{
   else if(e.target.id==='event-task')eventTask=e.target.value;
   else if(e.target.id==='event-type')eventType=e.target.value;
   else return;render();
+});
+$('#task-detail').addEventListener('keydown',e=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)||!e.target.matches('[role="tab"]'))return;
+  const tabs=[...$('#task-detail').querySelectorAll('[role="tab"]')],index=tabs.indexOf(e.target);
+  const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+  e.preventDefault();tabs[next].focus();tabs[next].click();
 });
 async function start() {
   if(token) {try{await api('/api/session',{});token='';}catch(_){/* Bearer fallback if an older server does not support sessions. */}}

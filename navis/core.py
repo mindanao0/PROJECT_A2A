@@ -112,10 +112,34 @@ class Runtime:
                 task["queue_reasons"] = reasons
             result["resources"] = {"slots": [{"backend": "fake-agent", "used": len(active), "limit": 1}],
                                    "memory_available": False, "mode": "simulation"}
-            result.update(events=[dict(json.loads(body), seq=seq) for seq, body in rows],
+            # Keep the polling response small. Artifact bodies and full event output are
+            # fetched only for the task the user opens in the detail dialog.
+            for task in result["tasks"]:
+                for artifact in task.get("artifacts", []):
+                    artifact.pop("content", None)
+                if task.get("source"):
+                    for artifact in task["source"].get("artifacts", []):
+                        artifact.pop("content", None)
+            event_rows = []
+            for seq, body in rows:
+                event = dict(json.loads(body), seq=seq)
+                event.pop("output", None)
+                event_rows.append(event)
+            result.update(events=event_rows,
                           cursor=rows[-1][0] if rows else cursor, latest_cursor=last,
                           capabilities={"fake": "simulated", "codex": "not tested", "claude": "not tested", "local": "not connected"})
             return result
+
+    def task_detail(self, task_id):
+        """Return full evidence for one task, separately from the lightweight poll."""
+        with self.lock:
+            task = json.loads(json.dumps(self.task(task_id)))
+            summary = next(t for t in self.snapshot()["tasks"] if t["id"] == task_id)
+            task["queue_reasons"] = summary.get("queue_reasons", [])
+            rows = self.db.execute("SELECT seq,body FROM events ORDER BY seq").fetchall()
+            events = [dict(json.loads(body), seq=seq) for seq, body in rows
+                      if json.loads(body).get("task_id") == task_id]
+            return {"task": task, "events": events}
 
     def task(self, task_id):
         for task in self.state["tasks"]:

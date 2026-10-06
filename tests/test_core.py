@@ -168,6 +168,15 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(self.runtime.snapshot()['tasks']), 1)
         self.assertEqual(len(self.runtime.snapshot()['events']), 1)
 
+    def test_task_evidence_is_excluded_from_poll_and_available_on_demand(self):
+        task = self.create()
+        task['artifacts'].append({'id':'artifact-test','kind':'diff','name':'Patch','attempt_id':'attempt-test','content':'+full patch'})
+        self.runtime.save()
+        summary = next(t for t in self.runtime.snapshot()['tasks'] if t['id']==task['id'])
+        self.assertNotIn('content',summary['artifacts'][-1])
+        detail = self.runtime.task_detail(task['id'])
+        self.assertEqual(detail['task']['artifacts'][-1]['content'],'+full patch')
+
     def test_queue_reasons_report_pause_scope_slot_and_cooldown(self):
         first = self.create('hang')
         self.runtime.tick()
