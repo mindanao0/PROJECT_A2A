@@ -152,7 +152,7 @@ GUI เดียวกัน แต่ขับ runtime จริงผ่าน
 | REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
 | Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
 
-ข้อจำกัด: adapter ของ Codex/Claude ยังไม่ผ่าน probe จริง; `gui-smoke.cjs` ยังล้มที่ `getByLabel('Simulation scenario', {exact:true})` ทั้งบน `main` และ branch นี้ (ไม่เกี่ยวกับโหมด real)
+ข้อจำกัด: adapter ของ Codex/Claude ยังไม่ผ่าน probe จริง; `gui-smoke.cjs` แก้ selector/ข้อความที่ UI เปลี่ยนไปแล้วและผ่านบน Chromium headless (2026-10-06, โหมด simulation เท่านั้น; ยังไม่ครอบคลุมโหมด real)
 
 ## ทดสอบ
 
