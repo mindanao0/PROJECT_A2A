@@ -90,6 +90,8 @@ local_or_remote
 
 ห้ามใช้ free-form chat อย่างเดียว
 
+ช่องทางจริง: Runtime เป็น MCP server ต่อ attempt และ agent ส่งผลผ่าน tool (`report_result`, `ask_user`, `run_check`) — ดู [Execution Design](EXECUTION_DESIGN.md) §1; message types ด้านล่างเป็น event types ใน log
+
 Message types เบื้องต้น:
 
 ```text
@@ -210,14 +212,12 @@ Agent ขอ content เมื่อต้องใช้จริง
 
 ไม่แนะนำให้หลาย agent เขียน working tree เดียวกัน
 
-Default:
+Default: clone ต่อ attempt (`git clone --shared`) ใน state dir ของ Runtime ไม่ใช้ worktree เพราะ worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout หลัก — ดู [Execution Design](EXECUTION_DESIGN.md) §4
 
 ```text
-project/
-worktrees/
-  codex-task-42/
-  claude-task-43/
-  local-task-44/
+<state>/attempts/
+  att-42-1/repo   # codex
+  att-43-1/repo   # claude
 ```
 
 Merge Manager จัดการ:
@@ -227,7 +227,7 @@ Merge Manager จัดการ:
 - integration tests
 - rollback
 
-Worktree ไม่ใช่ process sandbox; shared Git metadata, ports, databases, containers และ temp paths ต้องมีขอบเขต/ownership แยก การจำกัดสิทธิ์และ workspace/resource isolation ต้องมาก่อน multi-agent writes
+Clone ไม่ใช่ process sandbox; ports, databases, containers และ temp paths ต้องมีขอบเขต/ownership แยก การจำกัดสิทธิ์และ workspace/resource isolation ต้องมาก่อน multi-agent writes
 
 File locks อาจมีได้ แต่เป็น optimization ไม่ใช่ isolation หลัก
 
@@ -310,6 +310,7 @@ Runtime ควรมี scoped secret broker:
 - local model อาจถูก policy ห้ามเห็น cloud credentials
 - logs ต้อง redact secrets
 - artifact/event storage ห้ามเก็บ token ดิบ
+- credential ของ agent CLI เองอยู่ใน agent home แยก แต่คำสั่งของ agent ยังอ่านได้ จึงต้อง scan แบบ exact match ก่อนข้อมูลออกจาก attempt — ดู [Execution Design](EXECUTION_DESIGN.md) §3
 
 ## 15. Event Store and recovery
 

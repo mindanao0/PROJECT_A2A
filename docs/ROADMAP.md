@@ -2,16 +2,12 @@
 
 > ขอบเขต MVP ยืนยันแล้วใน [Confirmed Decisions](DECISIONS.md); implementation และเกณฑ์ผ่านด้านล่างยังเป็นข้อเสนอ รายละเอียดอยู่ใน [MVP Contract](MVP_CONTRACT.md)
 
-## Phase 0 — Linux adapter feasibility
+## Phase 0 — Linux boundary feasibility (ไม่ใช้ quota)
 
-พิสูจน์ Codex, Claude Code และ local backend หนึ่งตัวผ่าน CLI/session หรือ local endpoint
-เริ่มจาก read-only probes; ไม่ต้องทำ UI ใหญ่หรือ coding agent สำหรับ local model
-
-ทดสอบ start, task/result, streaming, interrupt, process-tree termination, resume, crash/restart, concurrent sessions, approval/enforcement และ usage visibility
-เก็บ compatibility matrix พร้อมเวอร์ชัน, test commands และ evidence; capability ที่ไม่ผ่านให้ unsupported/limited ไม่จำลองว่ารองรับ
-
-เลือก core language/transport/storage หลังได้ผล lifecycle ที่จำเป็น
-Exit: รู้ interface และข้อจำกัดจริงของ backend ทั้งสามบทบาท
+Boundary probes: `probes/boundary.sh` (ผ่านแล้ว 2026-10-06)
+สร้าง `fake-agent` ก่อน adapter จริง เพื่อให้ acceptance scenarios ทดสอบได้โดยไม่ใช้ quota (D-013)
+Core language: Python (D-012)
+Exit: sandbox, cgroup และ git isolation ใช้งานได้บนเครื่องจริง
 
 ## Phase 1 — Single-agent MVP foundations
 
@@ -26,10 +22,19 @@ Exit: รู้ interface และข้อจำกัดจริงของ
 - crash reconciliation, action IDs และ stale-result rejection
 - immutable artifact refs, deterministic context baseline และ verifier evidence
 - local client authorization boundary; remote listener ปิด
+- scope claim, task dedup, slot และ cgroup limits (D-008)
+- WAITING_QUOTA และ provider cooldown (D-009)
 
 UI แสดงงาน สถานะ backend ผลลัพธ์/diff สิ่งที่รอผู้ใช้ และปุ่มควบคุม
 Local helper สรุป context/วิเคราะห์ log เท่านั้น ไม่มี write/exec tools
-Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านพร้อม evidence
+Exit: single-agent, boundary, controls, recovery และ local UI acceptance cases ผ่านกับ `fake-agent` พร้อม evidence
+
+## Phase 1b — Real backend probes (ใช้ quota)
+
+หลัง Phase 1 ผ่านกับ fake แล้วจึงรัน probes ใน [Execution Design](EXECUTION_DESIGN.md) §10 กับ Codex, Claude Code และ local backend หนึ่งตัว
+ทดสอบ start, task/result, streaming, interrupt, resume, crash/restart, approval/enforcement และ usage visibility
+เก็บ compatibility matrix พร้อมเวอร์ชัน, test commands และ evidence; capability ที่ไม่ผ่านให้ unsupported/limited ไม่จำลองว่ารองรับ
+Exit: adapter จริงผ่าน acceptance scenarios ชุดเดียวกับ fake
 
 ## Phase 2 — Two-agent collaboration and integration
 
