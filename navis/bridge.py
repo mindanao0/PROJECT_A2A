@@ -28,7 +28,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
          "leak": "LEAK", "stale-result-dropped": "STALE", "integrate": "INTEGRATE", "integrate-error": "INTEGRATE",
-         "promote": "PROMOTE", "review": "REVIEW"}
+         "promote": "PROMOTE", "review": "REVIEW", "integration-discarded": "INTEGRATE"}
 
 
 def message(kind, d):
@@ -49,6 +49,7 @@ def message(kind, d):
             "integrate-error": lambda: f"Not integrated: {d.get('error')}",
             "promote": lambda: f"Your branch {d.get('branch')} fast-forwarded to {str(d.get('commit'))[:10]}",
             "review": lambda: f"Review of task {d.get('target')} by {d.get('reviewer')}: {d.get('verdict')}",
+            "integration-discarded": lambda: f"Integration branch discarded (was {str(d.get('commit'))[:10]}); tasks stay completed",
             }.get(kind, lambda: kind)()
 
 
@@ -203,7 +204,7 @@ class Bridge:
         for t in rows:
             if t["status"] == "RUNNING":
                 busy[t["agent"]] = busy.get(t["agent"], 0) + 1
-        return {"now": now, "rows": rows, "attempts": attempts, "latest": latest, "evidence": evidence, "instr": instr, "reviews": reviews,
+        return {"now": now, "rows": rows, "attempts": attempts, "latest": latest, "evidence": evidence, "instr": instr, "reviews": reviews, "by_id": {t["id"]: t for t in rows},
                 "busy": busy, "cool": {r["agent"]: r["until"] for r in s.q("select * from cooldowns")},
                 "touched": {r["task"]: r["m"] for r in s.q("select task, max(at) m from events where task is not null group by task")},
                 "running": [t for t in rows if t["status"] == "RUNNING"], "paused": runtime.is_paused(s), "projects": {}}
@@ -223,6 +224,10 @@ class Bridge:
                     reasons.append({"code": "scope", "task_id": str(o["id"]), "message": f"Scope held by {o['title'] or 'task ' + str(o['id'])}"})
             if c["busy"].get(t["agent"], 0) >= slots.get(t["agent"], 1):
                 reasons.append({"code": "slot", "message": f"{t['agent']} slots full ({c['busy'][t['agent']]}/{slots.get(t['agent'], 1)})"})
+            dep = t["after"] is not None and c["by_id"].get(t["after"])
+            if dep and dep["status"] != "COMPLETED":
+                reasons.append({"code": "dependency", "task_id": str(dep["id"]),
+                                "message": f"Waiting for task {dep['id']} to complete (it is {dep['status']})"})
             reasons = reasons or [{"code": "ready", "message": "Ready for the next dispatch tick"}]
         elif state == "WAITING_QUOTA":
             reasons.append({"code": "cooldown", "until": c["cool"].get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
@@ -231,7 +236,7 @@ class Bridge:
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
                        "expires": t["updated"] + 86400, "payload_hash": ""}
         return {
-            "kind": t["kind"] or "task", "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -315,6 +320,20 @@ class Bridge:
             return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
+        if action in ("review_integration", "discard_integration"):
+            if p.get("project_id") not in {x["id"] for x in self.projects()}:
+                raise ControlError("Unknown project")
+            try:
+                if action == "discard_integration":
+                    integrate.discard(s, p["project_id"], p.get("commit"))
+                    return {"ok": True, "message": "Integration branch discarded. Completed tasks can be integrated again."}
+                agent = p.get("agent") or "claude"
+                if agent not in runtime.ADAPTERS or not self.logged_in(agent):
+                    raise ControlError(f"{agent} is not available")
+                rid, dup = runtime.request_integration_review(s, p["project_id"], agent)
+            except (integrate.IntegrationError, ValueError) as e:
+                raise ControlError(str(e)[:300])
+            return {"task_id": str(dup or rid), "duplicate": bool(dup)}
         if action == "promote_integration":
             if p.get("project_id") not in {x["id"] for x in self.projects()}:
                 raise ControlError("Unknown project")
@@ -351,6 +370,12 @@ class Bridge:
                 ok = st == "WAITING_INPUT" and runtime.answer(s, tid, clean_text(p.get("text"), "Answer", 2000))
             elif st in ("WAITING_APPROVAL", "REVIEW"):
                 ok = (runtime.approve if action == "approve" else runtime.reject)(s, tid)
+        elif action == "revise":
+            try:
+                rid, dup = runtime.revise(s, tid)
+            except ValueError as e:
+                raise ControlError(str(e)[:300])
+            out, ok = {"task_id": str(dup or rid), "duplicate": bool(dup)}, st == "COMPLETED"
         elif action == "integrate":
             out, ok = self.start_integrate(t), st == "COMPLETED"
         elif action in ("review_with_claude", "continue_with_codex"):
@@ -421,10 +446,17 @@ class Bridge:
                       "artifacts": [{"name": "result commit", "hash": old["head"]}]}
         if not isinstance(base, str) or base.startswith("-") or len(base) > 200:
             raise ControlError("Invalid base")
+        after = p.get("after_task_id")
+        if after not in (None, ""):
+            if not str(after).isdigit():
+                raise ControlError("Invalid dependency")
+            after = int(after)
+        else:
+            after = None
         try:
             tid, dup = runtime.add_task(self.store, project, p.get("agent") or "fake",
                                         clean_text(p.get("spec"), "Task description"), normalize_scope(p.get("scope")),
-                                        base, clean_text(p.get("title"), "Title", 120), source)
+                                        base, clean_text(p.get("title"), "Title", 120), source, after=after)
         except (ValueError, subprocess.CalledProcessError) as e:
             raise ControlError(f"Cannot queue task: {e}"[:300])
         return {"task_id": str(dup or tid), "duplicate": bool(dup)}

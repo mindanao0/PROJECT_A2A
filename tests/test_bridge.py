@@ -273,6 +273,44 @@ class Runtime(BridgeTest):
         self.cmd(tid, "integrate")
         self.pump(lambda s: any(i["can_promote"] for i in s["integration"]))
 
+    def test_dependency_reason_and_bounded_revision_from_the_gui(self):
+        a = self.create(edit("src/a/x.py") + DONE, scope="src/a/")
+        b = self.create(edit("src/b/y.py") + DONE, scope="src/b/", after_task_id=a)
+        reasons = self.task(self.b.snapshot(), b)["queue_reasons"]
+        self.assertIn(("dependency", a), [(r["code"], r.get("task_id")) for r in reasons])
+        with self.assertRaisesRegex(ControlError, "Invalid dependency"):
+            self.create(DONE, after_task_id="x")
+        snap = self.pump(lambda s: self.task(s, a)["state"] == "COMPLETED" and self.task(s, b)["state"] == "COMPLETED")
+        self.assertEqual(self.task(snap, b)["after"], a)
+        with self.assertRaisesRegex(ControlError, "does not ask for changes"):
+            self.cmd(a, "revise")
+        rid, _ = runtime.request_review(self.store, int(a), "fake", step("mcp", tool="report_result",
+                                        args={"status": "failed", "summary": "src/a/x.py:1 wrong"}))
+        snap = self.pump(lambda s: self.task(s, str(rid))["state"] == "COMPLETED")
+        self.assertEqual(self.task(snap, a)["reviews"][0]["verdict"], "changes")
+        new = self.cmd(a, "revise")
+        self.assertFalse(new["duplicate"])
+        snap = self.pump(lambda s: self.task(s, new["task_id"])["state"] == "COMPLETED")
+        self.assertEqual(self.task(snap, new["task_id"])["round"], 1)
+        self.assertTrue(self.cmd(a, "revise")["duplicate"])
+
+    def test_integration_review_and_discard_commands(self):
+        tid = self.create(edit("src/x.py") + DONE)
+        self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
+        with self.assertRaisesRegex(ControlError, "nothing in the integration branch"):
+            self.b.command({"action": "review_integration", "project_id": "p", "agent": "fake"})
+        self.cmd(tid, "integrate")
+        snap = self.pump(lambda s: any(i["can_promote"] for i in s["integration"]))
+        (i,) = snap["integration"]
+        self.assertFalse(i["review_needed"])
+        with self.assertRaisesRegex(ControlError, "changed"):
+            self.b.command({"action": "discard_integration", "project_id": "p", "commit": "0" * 40})
+        self.b.command({"action": "discard_integration", "project_id": "p", "commit": i["commit"]})
+        self.assertEqual(self.b.snapshot()["integration"], [])
+        self.assertIn("Integration branch discarded", " ".join(e["message"] for e in self.b.snapshot()["events"]))
+        with self.assertRaisesRegex(ControlError, "Unknown project"):
+            self.b.command({"action": "discard_integration", "project_id": "nope"})
+
 
 class Http(BridgeTest):
     def test_server_drives_the_real_runtime(self):

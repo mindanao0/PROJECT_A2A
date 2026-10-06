@@ -38,6 +38,7 @@ def main(argv=None):
     a.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
+    a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
     a.add_argument("spec", help="task text, or - to read it from stdin")
     sub.add_parser("ls", help="list tasks")
     sub.add_parser("run", help="run the scheduler (one per machine)")
@@ -50,6 +51,13 @@ def main(argv=None):
     rv = sub.add_parser("review", help="queue a read-only review of a completed task's exact result")
     rv.add_argument("id", type=int)
     rv.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
+    rv2 = sub.add_parser("revise", help="queue a bounded follow-up round that addresses a review's findings")
+    rv2.add_argument("id", type=int)
+    rv2.add_argument("-a", "--agent", choices=sorted(runtime.ADAPTERS), help="default: the original agent")
+    ri = sub.add_parser("review-integration", help="queue a read-only review of the merged integration commit")
+    ri.add_argument("project")
+    ri.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
+    sub.add_parser("discard", help="roll back: drop a project's integration branch").add_argument("project")
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -60,7 +68,10 @@ def main(argv=None):
     store = runtime.open_store()
     if args.cmd == "add":
         spec = sys.stdin.read() if args.spec == "-" else args.spec
-        tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base)
+        try:
+            tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after)
+        except ValueError as e:
+            sys.exit(str(e))
         if dup:
             sys.exit(f"duplicate of task {dup}; not queued")
         print(tid)
@@ -92,6 +103,23 @@ def main(argv=None):
         if dup:
             sys.exit(f"duplicate of review task {dup}; not queued")
         print(rid)
+    elif args.cmd == "revise":
+        try:
+            rid, dup = runtime.revise(store, args.id, args.agent)
+        except ValueError as e:
+            sys.exit(str(e))
+        print(f"duplicate of task {dup}; not queued" if dup else rid)
+    elif args.cmd == "review-integration":
+        try:
+            rid, dup = runtime.request_integration_review(store, args.project, args.agent)
+        except ValueError as e:
+            sys.exit(str(e))
+        print(f"duplicate of review task {dup}; not queued" if dup else rid)
+    elif args.cmd == "discard":
+        try:
+            print(f"discarded integration branch at {integrate.discard(store, args.project)[:10]}")
+        except integrate.IntegrationError as e:
+            sys.exit(str(e))
     elif args.cmd == "integration":
         st = integrate.status(store, args.project)
         print(f"branch {st['branch'] or '(detached)'} @ {st['head'][:10]}; integration @ {(st['commit'] or 'none')[:10]}")

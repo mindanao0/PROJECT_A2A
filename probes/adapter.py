@@ -5,6 +5,8 @@
     python3 probes/adapter.py codex|claude stop       # Stop mid-run: is the whole process tree gone?
     python3 probes/adapter.py codex|claude recover    # the runner "dies" mid-run: does the next runner clean up?
     python3 probes/adapter.py codex|claude review     # this agent implements, the other one reviews it (read-only)
+    python3 probes/adapter.py codex pair              # Codex and Claude work AT THE SAME TIME on separate scopes, then integrate
+    python3 probes/adapter.py codex|claude loop       # planted bug: fake implements, THIS agent reviews, the other revises, review again
 
 Needs a prior login into the isolated agent home (docs/EXECUTION_DESIGN.md §3). State lives in a
 short /tmp dir (the MCP socket path must stay under 108 characters) and the agent home is
@@ -21,14 +23,16 @@ import time
 from pathlib import Path
 
 agent = sys.argv[1]
-spec = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "review" else (
+spec = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] not in ("review", "loop", "pair") else (
     "Create the file src/hello.txt containing the word hi. Then call the run_check tool with name ok. "
     "Then call report_result with status done.")
 real = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "navis" / "agents" / agent
 work = Path(tempfile.mkdtemp(prefix="nv", dir="/tmp"))
 (work / "home/agents").mkdir(parents=True)
 (work / "cfg/projects").mkdir(parents=True)
-review = len(sys.argv) > 2 and sys.argv[2] == "review"
+review = len(sys.argv) > 2 and sys.argv[2] in ("review", "loop", "pair")
+pair = len(sys.argv) > 2 and sys.argv[2] == "pair"
+loop = len(sys.argv) > 2 and sys.argv[2] == "loop"
 other = {"codex": "claude", "claude": "codex"}[agent]
 for name in (agent, other) if review else (agent,):
     (work / "home/agents" / name).symlink_to(real.parent / name)
@@ -148,6 +152,61 @@ if stop:
     shutil.rmtree(work, ignore_errors=True)
     sys.exit(not all(checks.values()))
 rt = runtime.Runtime(s)
+if pair:  # the Phase 2 headline: two real agents, two clones, disjoint scopes, one integrated result
+    from navis import integrate
+    ids = {}
+    for name, folder in ((agent, "one"), (other, "two")):
+        task_spec = (f"Create the file src/{folder}/hello.txt containing the word {folder}. Then call the run_check tool "
+                     "with name ok. Then call report_result with status done.")
+        ids[name], _ = runtime.add_task(s, "p", name, task_spec, [f"src/{folder}"])
+    t0 = time.time()
+    rt.run_until_idle(600)
+    att = {r["task"]: (r["started"], r["ended"]) for r in s.q("select task, started, ended from attempts")}
+    (a0, a1), (b0, b1) = att[ids[agent]], att[ids[other]]
+    overlap = min(a1, b1) - max(a0, b0)
+    print(f"{agent}: {s.one('select status from tasks where id = ?', ids[agent])['status']} ({a1 - a0:.0f}s), "
+          f"{other}: {s.one('select status from tasks where id = ?', ids[other])['status']} ({b1 - b0:.0f}s); ran together for {overlap:.0f}s")
+    ok = overlap > 0 and all(s.one("select status from tasks where id = ?", i)["status"] == "COMPLETED" for i in ids.values())
+    if ok:
+        for i in ids.values():
+            tip = integrate.integrate(rt, i)
+        files = subprocess.run(["git", "-C", str(proj), "ls-tree", "-r", "--name-only", tip], capture_output=True, text=True).stdout.split()
+        st = integrate.status(s, "p")
+        print(f"integrated at {tip[:10]}: {files}; checks on the merged commit: {[(c['name'], c['rc']) for c in st['checks']]}")
+        ok = "src/one/hello.txt" in files and "src/two/hello.txt" in files and all(c["rc"] == 0 for c in st["checks"])
+    print("PAIR", "PASS" if ok else "FAIL")
+    shutil.rmtree(work, ignore_errors=True)
+    sys.exit(not ok)
+if loop:  # does a real reviewer catch a planted bug, and does a bounded revision round fix it?
+    (work / "home/agents/fake").mkdir(exist_ok=True)
+    planted = ('# Requirement: src/calc.py must define add(a, b) returning the sum of a and b, treating None as 0.\n'
+               '[[step]]\ndo = "edit"\npath = "src/calc.py"\ntext = "def add(a, b):\\n    return a - b\\n"\n'
+               '[[step]]\ndo = "mcp"\ntool = "report_result"\nargs = {status = "done", summary = "implemented add"}\n')
+    t1, _ = runtime.add_task(s, "p", "fake", planted, ["src"])
+    rt.run_until_idle(120)
+
+    def review_round(label, task):
+        rid, _ = runtime.request_review(s, task, agent)
+        rt.run_until_idle(600)
+        v = runtime.reviews(s, task)[0]
+        print(f"{label}: reviewer {agent} says {v['verdict'].upper()} on {v['commit'][:10]}\n   " + v["summary"].replace("\n", "\n   ")[:700])
+        return v["verdict"]
+
+    first = review_round("planted bug", t1)
+    final = None
+    if first == "changes":
+        rid, _ = runtime.revise(s, t1, other)
+        rt.run_until_idle(600)
+        rev = s.one("select * from tasks where id = ?", rid)
+        print(f"revision by {other}: {rev['status']} | {rev['note'][:200]}")
+        code = subprocess.run(["git", "-C", str(proj), "show", f"refs/navis/attempts/{rid}-1:src/calc.py"], capture_output=True, text=True).stdout
+        print("--- src/calc.py after the revision\n" + code)
+        if rev["status"] == "COMPLETED":
+            final = review_round("after revision", rid)
+    ok = first == "changes" and final == "approve"
+    print("LOOP", "PASS" if ok else "DID NOT CONVERGE", f"(first={first}, final={final})")
+    shutil.rmtree(work, ignore_errors=True)
+    sys.exit(not ok)
 rt.run_until_idle(600)
 if review:
     done = s.one("select status from tasks where id = ?", tid)["status"]

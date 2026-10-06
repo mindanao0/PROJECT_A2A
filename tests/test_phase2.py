@@ -1,0 +1,216 @@
+"""Phase 2: dependencies, bounded revision rounds, delegation, reviews that claim no scope."""
+
+import json
+import time
+
+from navis import integrate, runtime
+from test_navis import DONE, NavisTest, edit, step
+
+
+def verdict(status, summary):
+    return step("mcp", tool="report_result", args={"status": status, "summary": summary})
+
+
+class Dependencies(NavisTest):
+    def add_after(self, spec, scope, after):
+        tid, dup = runtime.add_task(self.store, "p", "fake", spec, scope, after=after)
+        self.assertIsNone(dup)
+        return tid
+
+    def test_dependent_task_waits_then_starts_from_the_dependency_result(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)  # disjoint scope: only the dependency orders them
+        self.run_all()
+        ta, tb = self.task(a), self.task(b)
+        self.assertEqual((ta["status"], tb["status"]), ("COMPLETED", "COMPLETED"))
+        self.assertEqual(tb["base"], ta["head"])
+        started = {r["task"]: r["started"] for r in self.store.q("select task, started from attempts")}
+        ended = {r["task"]: r["ended"] for r in self.store.q("select task, ended from attempts")}
+        self.assertGreaterEqual(started[b], ended[a])
+        self.assertEqual(self.shown(f"{b}-1", "src/a/x.py"), "x\n")  # b's checkout contained a's work
+
+    def test_a_failed_dependency_keeps_the_dependent_queued_and_unstarted(self):
+        a = self.add(step("crash", code=3), scope=["src/a"])
+        b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)
+        end = time.time() + 8
+        while time.time() < end:
+            self.rt.tick()
+            time.sleep(0.2)
+        for th in self.rt.threads:
+            th.join(20)
+        self.assertEqual(self.task(a)["status"], "FAILED")
+        self.assertEqual(self.task(b)["status"], "QUEUED")
+        self.assertEqual(self.store.q("select 1 from attempts where task = ?", b), [])
+
+    def test_dependency_must_be_an_implementation_task_in_the_same_project(self):
+        with self.assertRaises(ValueError):
+            runtime.add_task(self.store, "p", "fake", DONE, ["src"], after=9999)
+
+    def test_a_dependent_cannot_be_integrated_before_its_dependency(self):
+        a = self.add(edit("src/a/x.py") + DONE, scope=["src/a"])
+        b = self.add_after(edit("src/b/y.py") + DONE, ["src/b"], a)
+        self.run_all()
+        with self.assertRaisesRegex(integrate.IntegrationError, f"builds on task {a}"):
+            integrate.integrate(self.rt, b)
+        integrate.integrate(self.rt, a)
+        self.assertTrue(integrate.integrate(self.rt, b))
+
+
+class Revision(NavisTest):
+    def reviewed(self, status="failed", summary="src/x.py:1 wrong"):
+        tid = self.add(edit("src/x.py") + DONE)
+        self.run_all()
+        runtime.request_review(self.store, tid, "fake", verdict(status, summary))
+        self.run_all()
+        return tid
+
+    def test_revision_starts_from_the_reviewed_commit_with_the_findings(self):
+        tid = self.reviewed()
+        rid, dup = runtime.revise(self.store, tid)
+        self.assertIsNone(dup)
+        r = self.task(rid)
+        self.assertEqual((r["base"], r["round"], r["agent"]), (self.task(tid)["head"], 1, "fake"))
+        self.assertIn("src/x.py:1 wrong", r["context"])
+        self.run_all()
+        self.assertEqual(self.task(rid)["status"], "COMPLETED")
+        prompt = (self.tmp / "home" / "attempts" / f"{rid}-1" / "prompt.txt").read_text()
+        self.assertIn("Reviewer findings on your previous result", prompt)
+        self.assertNotIn("Already completed in this scope", prompt)  # the task being revised is not "done, do not redo"
+        self.assertEqual(runtime.revise(self.store, tid)[1], rid)  # asking twice is the same work
+
+    def test_only_a_change_request_on_the_current_result_can_be_revised(self):
+        approved = self.reviewed("done", "fine")
+        with self.assertRaisesRegex(ValueError, "does not ask for changes"):
+            runtime.revise(self.store, approved)
+        unreviewed = self.add(edit("src/z.py") + DONE)
+        self.run_all()
+        with self.assertRaisesRegex(ValueError, "does not ask for changes"):
+            runtime.revise(self.store, unreviewed)
+
+    def test_rounds_are_bounded_and_an_old_approval_does_not_cover_the_revision(self):
+        cfg = self.tmp / "cfg" / "config.toml"
+        cfg.write_text(cfg.read_text().replace("max_attempts = 2", "max_attempts = 2\nreview_rounds = 1"))
+        self.rt = runtime.Runtime(self.store)
+        tid = self.reviewed()
+        rid, _ = runtime.revise(self.store, tid)
+        self.run_all()
+        runtime.request_review(self.store, rid, "fake", verdict("failed", "still wrong"))
+        self.run_all()
+        with self.assertRaisesRegex(ValueError, "revision limit reached"):
+            runtime.revise(self.store, rid)
+        self.assertFalse(runtime.review_approved(self.store, rid, self.task(tid)["head"]))
+        self.assertFalse(runtime.review_approved(self.store, rid, self.task(rid)["head"]))
+
+
+class Delegation(NavisTest):
+    def tool(self, t, **args):
+        return self.rt._delegate(self.task(t), args)
+
+    def test_agent_delegates_follow_up_work_that_starts_after_it_finishes(self):
+        child_spec = edit("src/d.py") + DONE
+        parent = self.add(step("mcp", tool="delegate", args={"title": "more", "spec": child_spec, "scope": ["src/d.py"]})
+                          + edit("src/p.py") + DONE)
+        self.run_all()
+        (child,) = self.store.q("select * from tasks where parent = ?", parent)
+        self.assertEqual((child["after"], child["status"], child["base"]), (parent, "COMPLETED", self.task(parent)["head"]))
+        self.assertEqual(self.shown(f"{child['id']}-1", "src/p.py"), "x\n")  # it started from the parent's result
+
+    def test_delegation_is_bounded(self):
+        parent = self.add(step("hang"), scope=["src/a"])
+        spec = DONE
+        self.assertTrue(self.tool(parent, title="t", spec=spec, scope=["src/a/one"])[0])
+        ok, msg = self.tool(parent, title="t", spec=spec, scope=["src/other"])
+        self.assertFalse(ok)
+        self.assertIn("scope must stay inside src/a", msg)
+        self.assertFalse(self.tool(parent, title="t", spec="", scope=["src/a"])[0])
+        self.assertTrue(self.tool(parent, title="t2", spec=spec + "# 2\n", scope=["src/a"])[0])
+        self.assertTrue(self.tool(parent, title="t3", spec=spec + "# 3\n", scope=["src/a"])[0])
+        self.assertIn("limit", self.tool(parent, title="t4", spec=spec + "# 4\n", scope=["src/a"])[1])
+        (child, *_) = self.store.q("select * from tasks where parent = ?", parent)
+        self.assertEqual(self.rt._delegate(child, {"title": "x", "spec": spec, "scope": ["src/a"]}),
+                         (False, "this task cannot delegate"))
+
+    def test_a_review_neither_delegates_nor_blocks_implementation(self):
+        done = self.add(edit("src/x.py") + DONE)
+        self.run_all()
+        rid, _ = runtime.request_review(self.store, done, "fake", step("hang"))
+        other = self.add(step("hang"))  # scope src: a review claims no scope, so both run together
+        self.rt.tick()
+        self.wait(lambda: self.task(rid)["status"] == "RUNNING" and self.task(other)["status"] == "RUNNING")
+        self.assertEqual(self.rt._delegate(self.task(rid), {"title": "x", "spec": DONE, "scope": ["src"]}),
+                         (False, "this task cannot delegate"))
+        runtime.stop_task(self.store, rid)
+        runtime.stop_task(self.store, other)
+        for th in self.rt.threads:
+            th.join(30)
+
+
+class IntegrationReview(NavisTest):
+    def setUp(self):
+        super().setUp()
+        cfg = self.tmp / "cfg" / "projects" / "p.toml"
+        cfg.write_text(cfg.read_text().replace("protected", "require_review = true\nprotected", 1))
+
+    def approved_task(self, path):
+        tid = self.add(edit(path) + DONE, scope=[path.rsplit("/", 1)[0]])
+        self.run_all()
+        runtime.request_review(self.store, tid, "fake", verdict("done", "ok"))
+        self.run_all()
+        return tid
+
+    def review_integration(self, status, summary):
+        rid, dup = runtime.request_integration_review(self.store, "p", "fake", verdict(status, summary))
+        self.assertIsNone(dup)
+        self.run_all()
+        return rid
+
+    def test_a_merge_of_approved_tasks_needs_its_own_review_before_promote(self):
+        a, b = self.approved_task("src/a/x.py"), self.approved_task("src/b/y.py")
+        integrate.integrate(self.rt, a)
+        self.assertTrue(integrate.status(self.store, "p")["can_promote"])  # a fast-forward of the reviewed commit
+        tip = integrate.integrate(self.rt, b)  # a real merge commit nobody has reviewed
+        st = integrate.status(self.store, "p")
+        self.assertEqual((st["can_promote"], st["review_needed"]), (False, True))
+        with self.assertRaisesRegex(integrate.IntegrationError, "integration commit"):
+            integrate.promote(self.store, "p")
+        rid = self.review_integration("done", "the two fit together")
+        prompt = (self.tmp / "home" / "attempts" / f"{rid}-1" / "prompt.txt").read_text()
+        self.assertIn(f"Task {a}:", prompt)
+        self.assertIn(f"Task {b}:", prompt)
+        self.assertIn("+x", prompt)
+        self.assertIn("work together after the merge", prompt)
+        self.assertEqual(self.task(rid)["base"], tip)
+        self.assertEqual(runtime.reviews(self.store)[0]["integration"], True)
+        self.assertTrue(integrate.status(self.store, "p")["can_promote"])
+        self.assertEqual(integrate.promote(self.store, "p"), tip)
+
+    def test_a_change_request_blocks_and_new_integration_makes_the_approval_stale(self):
+        a, b, c = (self.approved_task(f"src/{n}/f.py") for n in "abc")
+        integrate.integrate(self.rt, a)
+        integrate.integrate(self.rt, b)
+        self.review_integration("failed", "src/b/f.py:1 conflicts with a")
+        self.assertFalse(integrate.status(self.store, "p")["can_promote"])
+        self.review_integration("done", "fixed")
+        self.assertTrue(integrate.status(self.store, "p")["can_promote"])
+        integrate.integrate(self.rt, c)  # the commit changed: the approval no longer covers it
+        self.assertTrue(integrate.status(self.store, "p")["review_needed"])
+
+    def test_nothing_to_review_before_anything_is_integrated(self):
+        with self.assertRaisesRegex(ValueError, "nothing in the integration branch"):
+            runtime.request_integration_review(self.store, "p", "fake")
+
+
+class Rollback(NavisTest):
+    def test_discard_drops_the_integration_branch_and_tasks_can_be_integrated_again(self):
+        tid = self.add(edit("src/x.py") + DONE)
+        self.run_all()
+        tip = integrate.integrate(self.rt, tid)
+        with self.assertRaisesRegex(integrate.IntegrationError, "changed"):
+            integrate.discard(self.store, "p", expected="0" * 40)
+        self.assertEqual(integrate.discard(self.store, "p", expected=tip), tip)
+        self.assertEqual(self.git("rev-parse", "--verify", "-q", "refs/navis/integration/p").strip(), "")
+        self.assertEqual(self.task(tid)["status"], "COMPLETED")
+        self.assertEqual(integrate.status(self.store, "p")["reason"], "nothing to promote")
+        with self.assertRaisesRegex(integrate.IntegrationError, "no integration branch"):
+            integrate.discard(self.store, "p")
+        self.assertEqual(integrate.integrate(self.rt, tid), tip)
