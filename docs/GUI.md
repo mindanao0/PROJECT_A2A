@@ -95,7 +95,7 @@ navis
 
 Core อยู่ใน `navis/core.py` แยกจาก UI/HTTP; SQLite transaction เดียวบันทึก snapshot และ event เมื่อคำสั่งสำเร็จ ข้อมูลอยู่ใน `control.sqlite3` ไม่เขียน config ลง VELA
 
-UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor และส่งครั้งละไม่เกิน 300 รายการเพื่อ backpressure UI แสดงล่าสุด 1,000 รายการ แต่ event เก่ายังอยู่ใน database การ disconnect browser ไม่ยกเลิก task และเมื่อเชื่อมใหม่ในหน้าเดิมจะอ่านต่อจาก cursor เดิม
+UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor และส่งครั้งละไม่เกิน 300 รายการเพื่อ backpressure snapshot ไม่ส่ง artifact body หรือ full event output; เมื่อเปิด task UI ขอ `/api/tasks/<task_id>` เพื่ออ่าน evidence และ output ของ task นั้น และจะขอใหม่เมื่อ `updated_at` เปลี่ยน UI แสดง event ล่าสุด 1,000 รายการ แต่ event เก่ายังอยู่ใน database การ disconnect browser ไม่ยกเลิก task และเมื่อเชื่อมใหม่ในหน้าเดิมจะอ่านต่อจาก cursor เดิม
 
 ถ้า Runtime restart งานที่ active/รอ input/approval/quota จะเป็น BLOCKED และ revoke attempt เดิม ไม่ replay side effects หรือ resume จำลองเงียบ ๆ ผู้ใช้ต้อง Retry เอง งาน QUEUED ยังคงรอ dispatch ตาม pause state เดิม
 
@@ -128,10 +128,13 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 | Add project | ซ่อนเมื่อ snapshot mode เป็น real; simulation ยังใช้ได้ |
 | Stop/Kill | Native confirmation dialog, Cancel ไม่ส่ง command, ยึด observed attempt |
 | Event | filter task/type และเปิด full `output` ถ้า event มี field นี้; simulation ยังไม่มี prepare/check stdout จริง |
+| Real runtime controls | Banner เปลี่ยนตาม mode; REVIEW เปิด diff โดยตรงและแสดง approval; WAITING_INPUT แสดง input หรือแจ้งเมื่อ runtime ยังไม่ส่ง prompt; handoff เปิดเมื่อ `capabilities.handoff` ระบุพร้อมใช้งาน |
+| Provider/resource/settings | Agents อ่าน `providers` และ `cooldown_until`; Resources อ่าน `attempt.memory_bytes` หรือ `resources.attempt_memory_bytes`; Settings อ่าน `settings.editable/items` และส่ง `update_settings` เมื่อ runtime รองรับ |
+| Project setup | Add project เปิดใน real mode พร้อม path field และส่ง `create_project`; Runtime เป็นผู้ตรวจสิทธิ์และจัดเก็บ path |
 | Attention | Tab title แสดงจำนวน pending requests; browser notification เป็น opt-in ใช้เมื่อแท็บอยู่เบื้องหลังและยังเปิดอยู่ ไม่ทำ background/service-worker notifications และบาง mobile browser ไม่รองรับ |
 | Refresh | HttpOnly session cookie; Runtime restart หมุนทั้ง bearer/session และต้องเปิด launch link ใหม่ |
 
-Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือ reflow, touch targets, skip link, dialog labels, focus styling และการรักษาตำแหน่งพิมพ์ระหว่าง poll ถูกปรับ แต่ **ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก** ตามที่ผู้ใช้เลือกข้าม browser check
+Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือมี navigation แบบเลื่อนแนวนอน, responsive panels, touch targets, skip link, live announcements และ task-evidence tabs ใช้ arrow-key navigation. ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก. Runtime รุ่นนี้ยังเป็น simulation จึงไม่มี agent log, provider prompt, real cgroup samples, real handoff หรือ config writer; UI จะแสดง unavailable/error ตามความสามารถที่ runtime รายงานและไม่สร้างค่า telemetry เอง
 
 ## ทดสอบ
 
