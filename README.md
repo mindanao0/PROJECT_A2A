@@ -2,7 +2,19 @@
 
 ระบบกลางสำหรับให้ AI หลายตัวทำงานเป็นทีมในหลายโปรเจกต์ โดยมีเป้าหมายหลักคือให้ ChatGPT/Codex, Claude Code และ Local LLM สามารถคุย วิเคราะห์ แบ่งงาน ตรวจงาน และส่งผลลัพธ์หากันได้โดยไม่ต้องใช้ไฟล์ handoff เป็นช่องทางหลัก
 
-> สถานะ: **Design / Discussion Draft** — ยืนยันคำตัดสินแล้ว 13 ข้อ (Python, สร้างกับ `fake-agent` ก่อนใช้ CLI จริง); implementation ยังไม่ล็อก; boundary probes ที่ไม่ใช้ quota ผ่านแล้ว (`probes/boundary.sh`) แต่ adapter probes ยังไม่ได้ทดสอบ
+> สถานะ: **Design + Local GUI Foundation** — ยืนยันคำตัดสินแล้ว 13 ข้อ; เปิด GUI ที่ใช้ in-process fake-agent simulation ได้ด้วย `python3 -m navis` ยังไม่มี production Agent Runner หรือ adapter จริง Boundary probes ที่ไม่ใช้ quota ผ่านแล้ว (`probes/boundary.sh`) แต่ adapter probes ยังไม่ได้ทดสอบ
+
+## เปิด UI/GUI
+
+ต้องใช้ Linux + Python 3.11 ขึ้นไป ไม่มี runtime dependencies เพิ่ม:
+
+```bash
+python3 -m navis
+```
+
+เปิด local launch link ที่พิมพ์ใน terminal เพื่อเข้า Control room, Task board, Agents, Activity log, Artifacts และ Runtime settings สร้างงานและทดลอง Pause/Resume, Stop/Kill, Retry, input/approval ผ่าน simulation ได้ งานจำลองไม่อ่านหรือแก้ repository และไม่เรียก Codex/Claude/Local LLM จริง
+
+วิธีติดตั้ง การใช้งาน controls, authentication, persistence, ข้อจำกัดและผลทดสอบ: [Local GUI Guide](docs/GUI.md)
 
 ## ขอบเขต MVP ที่ยืนยันแล้ว
 
