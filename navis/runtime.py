@@ -117,7 +117,9 @@ def codex_cmd(prompt, mcp, home, io):
     exe = _which("codex")
     argv = [str(exe), "exec", "--json", "--sandbox", "workspace-write",
             "-c", f"mcp_servers.navis.command={json.dumps(mcp[0])}",
-            "-c", f"mcp_servers.navis.args={json.dumps(mcp[1:])}", prompt]
+            "-c", f"mcp_servers.navis.args={json.dumps(mcp[1:])}",
+            # `exec` never asks, so MCP calls fail ("requires approval") unless pre-approved; only our own tools.
+            "-c", 'mcp_servers.navis.default_tools_approval_mode="approve"', prompt]
     return argv, {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
 
 
