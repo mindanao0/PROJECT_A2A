@@ -168,6 +168,41 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(self.runtime.snapshot()['tasks']), 1)
         self.assertEqual(len(self.runtime.snapshot()['events']), 1)
 
+    def test_queue_reasons_report_pause_scope_slot_and_cooldown(self):
+        first = self.create('hang')
+        self.runtime.tick()
+        queued = self.create(spec='Blocked queue', scope='src/nested')
+        self.runtime.command({'action': 'pause'})
+        task = next(t for t in self.runtime.snapshot()['tasks'] if t['id'] == queued['id'])
+        self.assertEqual([r['code'] for r in task['queue_reasons']], ['paused', 'scope', 'slot'])
+        self.assertEqual(task['queue_reasons'][1]['task_id'], first['id'])
+        self.control(first, 'kill')
+        self.runtime.command({'action': 'resume'})
+        quota = self.create('quota', spec='Cooldown')
+        self.control(queued, 'stop')
+        self.runtime.tick()
+        self.tick()
+        task = next(t for t in self.runtime.snapshot()['tasks'] if t['id'] == quota['id'])
+        self.assertEqual(task['queue_reasons'][0]['code'], 'cooldown')
+        self.assertEqual(task['queue_reasons'][0]['until'], quota['due'])
+        self.assertFalse(self.runtime.snapshot()['resources']['memory_available'])
+
+    def test_source_task_is_bound_to_completed_attempt_and_saved_artifacts(self):
+        source = self.create()
+        self.runtime.tick(); self.tick(); self.tick()
+        request = dict(action='create_task', project_id='project-vela', title='Follow up', spec='Review previous result', scope='src/', source_task_id=source['id'], source_attempt_id=source['attempt_id'])
+        result = self.runtime.command(request)
+        following = self.runtime.task(result['task_id'])
+        self.assertEqual(following['source']['attempt_id'], source['attempt_id'])
+        self.assertEqual(following['source']['artifacts'], source['artifacts'])
+        source['artifacts'][0]['content'] = 'Changed later'
+        self.assertNotEqual(following['source']['artifacts'][0]['content'], 'Changed later')
+        with self.assertRaises(ControlError):
+            self.runtime.command(dict(request, source_attempt_id='stale'))
+        running = self.create('hang', spec='Not completed')
+        with self.assertRaises(ControlError):
+            self.runtime.command(dict(request, source_task_id=running['id'], source_attempt_id=None))
+
 
 if __name__ == '__main__':
     unittest.main()

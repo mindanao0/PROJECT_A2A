@@ -20,5 +20,6 @@ jobs:
           node-version: '22'
       - run: python -m unittest discover -s tests -v
       - run: node --check navis/web/app.js
+      - run: node tests/test-ui.cjs
       - run: python -m pip install --no-deps .
       - run: navis --help

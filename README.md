@@ -12,7 +12,7 @@
 python3 -m navis
 ```
 
-เปิด local launch link ที่พิมพ์ใน terminal เพื่อเข้า Control room, Task board, Agents, Activity log, Artifacts และ Runtime settings สร้างงานและทดลอง Pause/Resume, Stop/Kill, Retry, input/approval ผ่าน simulation ได้ งานจำลองไม่อ่านหรือแก้ repository และไม่เรียก Codex/Claude/Local LLM จริง
+เปิด local launch link ที่พิมพ์ใน terminal เพื่อเข้า UI ธีม **Cybernetics ดำ–แดง**: Control room, Task board, Agents, Activity log, Artifacts, Resources และ Runtime settings การ์ดแสดงเหตุผลรอคิวและ countdown; เลือกงานที่เสร็จแล้วเป็นต้นทางได้; Stop/Kill มีหน้าต่างยืนยัน และ refresh หน้าแล้ว session ยังใช้ได้ สร้างงานและทดลอง controls ผ่าน simulation ได้ งานจำลองไม่อ่านหรือแก้ repository และไม่เรียก Codex/Claude/Local LLM จริง
 
 วิธีติดตั้ง การใช้งาน controls, authentication, persistence, ข้อจำกัดและผลทดสอบ: [Local GUI Guide](docs/GUI.md)
 

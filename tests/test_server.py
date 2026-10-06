@@ -68,6 +68,28 @@ class TransportTests(unittest.TestCase):
         for path in ['/../core.py','/core.py','/api/token']:
             self.assertEqual(self.request(path=path,headers=self.auth())[0],404)
 
+    def test_browser_session_survives_reload_without_exposing_bearer(self):
+        status, _, headers = self.request('POST', '/api/session', self.auth(), '{}')
+        self.assertEqual(status, 200)
+        cookie = headers['Set-Cookie']
+        self.assertIn('HttpOnly', cookie)
+        self.assertIn('SameSite=Strict', cookie)
+        self.assertIn('Path=/api/', cookie)
+        self.assertNotIn(self.server.token, cookie)
+        session = {'Cookie': cookie.split(';')[0]}
+        self.assertEqual(self.request(headers=session)[0], 200)
+        self.assertEqual(self.request('POST', '/api/command', dict(session, Origin=self.server.origin, **{'Content-Type':'application/json'}), '{"action":"pause"}')[0], 200)
+
+    def test_cookie_does_not_bypass_origin_or_allow_session_bootstrap(self):
+        _, _, headers = self.request('POST', '/api/session', self.auth(), '{}')
+        session = {'Cookie': headers['Set-Cookie'].split(';')[0], 'Content-Type':'application/json'}
+        self.assertEqual(self.request('POST', '/api/command', dict(session, Origin='https://attacker.example'), '{"action":"pause"}')[0], 403)
+        self.assertEqual(self.request('POST', '/api/command', session, '{"action":"pause"}')[0], 403)
+        self.assertEqual(self.request('POST', '/api/session', dict(session, Origin=self.server.origin), '{}')[0], 401)
+        self.assertEqual(self.request(headers=dict(session, Authorization='Bearer wrong'))[0], 401)
+        self.server.session_token = 'new-session-after-restart'
+        self.assertEqual(self.request(headers=session)[0], 401)
+
 
 if __name__ == '__main__':
     unittest.main()
