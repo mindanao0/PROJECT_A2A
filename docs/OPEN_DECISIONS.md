@@ -1,6 +1,8 @@
 # Open Decisions
 
-เอกสารนี้เก็บสิ่งที่ **ยังไม่ได้ตัดสินใจ** เพื่อไม่ให้ discussion draft ถูกตีความว่า final design
+เอกสารนี้เก็บสิ่งที่ **ยังไม่ได้ตัดสินใจ** และสถานะคำตัดสินที่เกี่ยวข้อง รายการที่ยืนยันแล้วอ้าง [Confirmed Decisions](DECISIONS.md); ข้อเสนอ acceptance อยู่ใน [MVP Contract](MVP_CONTRACT.md)
+
+Confirmed scope ไม่ได้ล็อกภาษา framework transport storage หรือ sandbox implementation
 
 ## OD-001 Core implementation language
 
@@ -13,7 +15,9 @@
 
 ต้องพิจารณา daemon/process supervision, WebSocket, PTY, plugin adapters, packaging และ cross-platform support
 
-## OD-002 UI technology
+## OD-002 UI technology — PARTIALLY RESOLVED
+
+D-005 ยืนยัน UI บนเครื่องเดียวก่อน เตรียม authentication boundary สำหรับ remote ส่วน technology ยังเปิดอยู่
 
 ตัวเลือก:
 - Browser UI only
@@ -66,7 +70,9 @@ Internal protocol จะ:
 
 ต้องวัด overhead และ conflict behavior
 
-## OD-008 Who can merge
+## OD-008 Who can merge — OPEN
+
+D-003 ยืนยันอ่าน/แก้โค้ด/ทดสอบภายใน workspace ไม่ได้อนุมัติ push/merge/deploy หรือสิทธิ์ local commit รายละเอียด authority ยังต้องตัดสิน
 
 ตัวเลือก:
 - human only
@@ -128,9 +134,11 @@ Adapters/plugins จะรัน:
 
 ควรออกแบบ failure isolation ตั้งแต่ต้น
 
-## OD-015 Remote control
+## OD-015 Remote control — DEFERRED / BOUNDARY CONFIRMED
 
-อนาคตจะควบคุม Runtime จากโทรศัพท์/เครื่องอื่นหรือไม่ และ authentication/network boundary จะเป็นอย่างไร
+D-005 ยืนยัน local UI สำหรับ MVP และเตรียม authentication boundary สำหรับ remote ในอนาคต ยังไม่เปิด remote listener
+
+Remote implementation, transport/auth mechanism และการควบคุมจากโทรศัพท์ยังไม่ได้ตัดสิน
 
 ## OD-016 Persistent agent relationships
 
@@ -153,13 +161,30 @@ Debate mode จบอย่างไร:
 
 ไม่ควรใช้ majority vote อย่างเดียว
 
-## OD-018 First supported platforms
+## OD-018 First supported platforms — RESOLVED
 
-- Linux first
-- macOS first
-- Linux + macOS
-- Windows later
+D-002: Linux first ยืนยันแล้ว ระบบอื่นเป็นงานภายหลังและยังไม่อยู่ในเกณฑ์ผ่าน MVP
 
 ## OD-019 Provider policy compatibility
 
 ก่อน automate CLI ใด ต้องตรวจ official usage/policy/terms ของ provider และออกแบบ adapter ให้ใช้ช่องทางที่รองรับ ไม่ทำ browser scraping หรือ credential circumvention
+
+## OD-020 Initial backend surface — RESOLVED
+
+D-001: เริ่มจาก CLI/session ที่ Runtime จัดการ การเชื่อมแชทเดิมหรือ Project บนเว็บอยู่นอก MVP
+Interface ราย backend ยังต้องผ่าน OD-006 feasibility probes
+
+## OD-021 Initial execution scope — RESOLVED SCOPE / OPEN ENFORCEMENT
+
+D-003: อ่าน–แก้โค้ด–รันทดสอบภายใน assigned workspace
+Sandbox/tool-policy technology ยังเปิดอยู่ ต้องพิสูจน์ enforcement ก่อนอนุญาต writes; ไม่อนุมานสิทธิ์ side effects นอก workspace
+
+## OD-022 Initial Local LLM role — RESOLVED
+
+D-004: เริ่มจากสรุป context และวิเคราะห์ log
+เพิ่ม coding หลัง Agent Runner ผ่านการทดสอบและอนุญาตบทบาทนั้น Local backend/model/hardware budget ยังไม่ได้เลือก
+
+## OD-023 Lifecycle, evidence and controls — OPEN
+
+กำหนด state transition guards, event schema, action reconciliation, approval binding, Pause/Stop/Kill semantics และ immutable verification evidence
+ข้อเสนอ baseline อยู่ใน MVP Contract; ต้องพิสูจน์กับ adapter จริงก่อนล็อก implementation

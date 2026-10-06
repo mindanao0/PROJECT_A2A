@@ -1,6 +1,8 @@
 # Architecture Draft
 
-> Discussion baseline. This is deliberately not a final implementation plan.
+> Discussion baseline. ขอบเขต MVP ยืนยันแล้วใน [Confirmed Decisions](DECISIONS.md); รายละเอียด execution/lifecycle/acceptance ที่เสนอต่ออยู่ใน [MVP Contract](MVP_CONTRACT.md) ยังไม่ใช่ final implementation plan หรือผลทดสอบ
+
+MVP: Linux, Runtime-managed CLI/session, coding ภายใน assigned workspace, local helper สำหรับ context/log และ local UI พร้อม authentication boundary สำหรับ remote ในอนาคต
 
 ## 1. Problem statement
 
@@ -53,7 +55,9 @@
 
 ## 3. Agent adapter contract
 
-Adapter ต้อง normalize ความต่างของ agent backend
+Adapter ต้อง normalize ความต่างของ agent backend แต่ห้ามซ่อนข้อจำกัด: capability แต่ละข้อมี supported/limited/unsupported/unknown พร้อม evidence และ backend version
+
+แยก send task, mid-turn input, interrupt turn, terminate process tree และ resume session ออกจากกัน; ไม่รับประกันว่า send() แทรกข้อความกลางงานได้ทุก backend ส่วน local inference backend แยกจาก Agent Runner
 
 ```text
 start()
@@ -139,6 +143,8 @@ RUNNING -> FAILED
 FAILED  -> RETRY / REASSIGN
 ```
 
+State machine นี้เป็นภาพรวม; เพิ่ม WAITING_APPROVAL และ CANCELLING พร้อม transition guards ตาม MVP Contract แยก task/attempt/session/action; agent ไม่เปลี่ยน durable state ด้วยข้อความเอง
+
 Chat เป็นเพียง discussion layer แต่ Task Engine เป็นตัวกำหนดสถานะจริง
 
 ## 6. Agent Registry / capability discovery
@@ -196,6 +202,8 @@ log:artifact:71
 benchmark:run:54
 ```
 
+Reference ต้องผูก project และ immutable commit/content hash; file path อย่างเดียวเป็น locator ไม่ใช่ version identity
+
 Agent ขอ content เมื่อต้องใช้จริง
 
 ## 9. Workspace isolation
@@ -218,6 +226,8 @@ Merge Manager จัดการ:
 - conflict detection
 - integration tests
 - rollback
+
+Worktree ไม่ใช่ process sandbox; shared Git metadata, ports, databases, containers และ temp paths ต้องมีขอบเขต/ownership แยก การจำกัดสิทธิ์และ workspace/resource isolation ต้องมาก่อน multi-agent writes
 
 File locks อาจมีได้ แต่เป็น optimization ไม่ใช่ isolation หลัก
 
@@ -287,7 +297,9 @@ Action บางประเภทอาจ require approval:
 - deploy
 - production operation
 
-Agent ไม่สามารถยกระดับสิทธิ์ตัวเองได้
+Agent ไม่สามารถยกระดับสิทธิ์ตัวเองได้ Repo config/messages ยกระดับสิทธิ์ไม่ได้เช่นกัน
+
+MVP ยืนยันเฉพาะอ่าน/แก้โค้ด/ทดสอบภายใน assigned workspace ต้องระบุ enforcement ของ provider sandbox/approval หรือ tool executor และครอบคลุม native subagents; ถ้าพิสูจน์ไม่ได้ให้ปฏิเสธโหมดนั้น ห้าม fallback เป็น unrestricted execution
 
 ## 14. Secrets isolation
 
@@ -311,6 +323,8 @@ Runtime ควรมี scoped secret broker:
 แต่ Event Store ไม่ใช่ prompt history ที่ต้องส่งให้ model ทุกครั้ง
 
 ควร snapshot state เป็นระยะเพื่อไม่ต้อง replay event จำนวนมากหลัง restart
+
+Replay ใช้กู้ state ไม่ใช้รัน side effects ซ้ำ: บันทึก intent/ผลพร้อม action ID; crash ระหว่างสองขั้นให้ outcome_unknown และ reconcile ก่อน retry มี attempt lease และ stale-result rejection
 
 ## 16. Budget controller
 
@@ -360,6 +374,8 @@ Implementer + reviewer
 
 ## 19. UI requirements
 
+MVP ใช้ UI บนเครื่องเดียวและทำ UI เล็กพร้อม runtime skeleton; framework ยังไม่ล็อก เตรียม client authorization boundary แต่ remote listener ปิด รายละเอียด controls และ reconnect อยู่ใน MVP Contract
+
 UI ไม่ควรเป็น chat-only
 
 อย่างน้อยต้องเห็น:
@@ -400,6 +416,8 @@ Daemon หนึ่งตัวดูแลหลาย project ได้ แต
 - context cache
 
 ## 21. Local LLM roles
+
+MVP ที่ยืนยันแล้ว: Local LLM สรุป context และวิเคราะห์ log เท่านั้น ไม่มี write/exec tools Coding และบทบาทอื่นด้านล่างเป็น future candidates; coding ต้องมี Agent Runner ผ่าน tool/policy/cancellation/recovery/workspace tests และอนุญาตบทบาทนั้นก่อน
 
 Local LLM ไม่ควรถูกจำกัดเป็น coder เท่านั้น
 
