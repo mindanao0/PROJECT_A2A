@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from navis import agent_options as ao
@@ -68,6 +69,7 @@ class Pure(unittest.TestCase):
         shutil.rmtree(d)
 
 
+@mock.patch.object(runtime, "_which", lambda name: Path(f"/opt/{name}/bin/{name}"))  # argv only: no CLI needed
 class Adapters(unittest.TestCase):
     def test_claude_argv_carries_model_and_effort_only_when_set(self):
         with tempfile.TemporaryDirectory() as io:
@@ -77,7 +79,6 @@ class Adapters(unittest.TestCase):
         self.assertNotIn("--effort", plain)
         self.assertEqual((argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]), ("haiku", "low"))
 
-    @unittest.skipUnless(shutil.which("codex"), "needs the codex CLI on PATH")
     def test_codex_argv_carries_model_and_effort_only_when_set(self):
         plain, _, _ = runtime.codex_cmd("p", ["py", "m.py", "s"], Path("/h"), Path("/io"))
         argv, _, _ = runtime.codex_cmd("p", ["py", "m.py", "s"], Path("/h"), Path("/io"), model="gpt-6-luna", effort="low")
