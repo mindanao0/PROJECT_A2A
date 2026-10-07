@@ -5,7 +5,7 @@ import json
 import sys
 import time
 
-from . import agent_options, helper, integrate, retention, runtime, usage
+from . import agent_options, helper, integrate, retention, routing, runtime, usage
 
 
 def show_tasks(store):
@@ -35,7 +35,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("add", help="queue a task")
     a.add_argument("-p", "--project", required=True, help="name of ~/.config/navis/projects/<name>.toml")
-    a.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
+    a.add_argument("-a", "--agent", required=True, choices=["auto", *sorted(runtime.ADAPTERS)],
+                   help="auto = the first agent in the routing pool that can start it now (see navis-cli routing)")
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
     a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
@@ -73,6 +74,8 @@ def main(argv=None):
     ao.add_argument("agent", nargs="?", choices=agent_options.AGENTS)
     ao.add_argument("--model")
     ao.add_argument("--effort")
+    rt_ = sub.add_parser("routing", help="show or set which agent tasks created with -a auto try first")
+    rt_.add_argument("--first", choices=["claude", "codex"])
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -136,6 +139,10 @@ def main(argv=None):
             print(f"discarded integration branch at {integrate.discard(store, args.project)[:10]}")
         except integrate.IntegrationError as e:
             sys.exit(str(e))
+    elif args.cmd == "routing":
+        if args.first:
+            routing.save_first(runtime.config_dir() / "config.toml", args.first)
+        print("auto tries, in order: " + " -> ".join(routing.pool(runtime.load_config())))
     elif args.cmd == "agent-options":
         if args.agent and (args.model is not None or args.effort is not None):
             cur = runtime.load_config()["agents"]

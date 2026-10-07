@@ -4,6 +4,7 @@
     python3 probes/adapter.py codex|claude escape     # boundary self-test: the agent tries to leave its sandbox
     python3 probes/adapter.py codex|claude stop       # Stop mid-run: is the whole process tree gone?
     python3 probes/adapter.py codex|claude recover    # the runner "dies" mid-run: does the next runner clean up?
+    python3 probes/adapter.py auto                    # routing: the first agent that can start; ROUTE_COOL=claude fakes its cooldown
     python3 probes/adapter.py codex|claude review     # this agent implements, the other one reviews it (read-only)
     python3 probes/adapter.py codex pair              # Codex and Claude work AT THE SAME TIME on separate scopes, then integrate
     python3 probes/adapter.py codex|claude loop       # planted bug: fake implements, THIS agent reviews, the other revises, review again
@@ -30,11 +31,12 @@ real = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "
 work = Path(tempfile.mkdtemp(prefix="nv", dir="/tmp"))
 (work / "home/agents").mkdir(parents=True)
 (work / "cfg/projects").mkdir(parents=True)
+auto = agent == "auto"
 review = len(sys.argv) > 2 and sys.argv[2] in ("review", "loop", "pair")
 pair = len(sys.argv) > 2 and sys.argv[2] == "pair"
 loop = len(sys.argv) > 2 and sys.argv[2] == "loop"
-other = {"codex": "claude", "claude": "codex"}[agent]
-for name in (agent, other) if review else (agent,):
+other = {"codex": "claude", "claude": "codex", "auto": "codex"}[agent]
+for name in ("claude", "codex") if auto else (agent, other) if review else (agent,):
     (work / "home/agents" / name).symlink_to(real.parent / name)
 proj = work / "proj"
 (proj / "src").mkdir(parents=True)
@@ -92,6 +94,8 @@ subprocess.run([*git, "init", "-q"], check=True)
 subprocess.run([*git, "add", "-A"], check=True)
 subprocess.run([*git, "commit", "-qm", "init"], check=True)
 (work / "cfg/projects/p.toml").write_text(f'path = "{proj}"\n[checks]\nok = "true"\n')
+if auto:  # tests use the lowest settings
+    (work / "cfg/config.toml").write_text('[agents]\nclaude_model = "claude-haiku-4-5-20251001"\nclaude_effort = "low"\ncodex_effort = "low"\n')
 os.environ.update(NAVIS_HOME=str(work / "home"), NAVIS_CONFIG=str(work / "cfg"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from navis import runtime  # noqa: E402  (after the environment is set)
@@ -99,6 +103,8 @@ from navis import runtime  # noqa: E402  (after the environment is set)
 s = runtime.open_store()
 tid, _ = runtime.add_task(s, "p", agent, spec, ["src"], model=os.environ.get("PROBE_MODEL") or None,
                           effort=os.environ.get("PROBE_EFFORT") or None)  # e.g. PROBE_MODEL=haiku PROBE_EFFORT=low
+if auto and os.environ.get("ROUTE_COOL"):
+    s.x("insert or replace into cooldowns(agent, until, strikes) values (?,?,1)", os.environ["ROUTE_COOL"], time.time() + 3600)
 t0 = time.time()
 if stop:
     def ancestors():  # the shell that launched this probe has the pattern in its own command line
@@ -232,6 +238,10 @@ if review:
     shutil.rmtree(work, ignore_errors=True)
     sys.exit(1)
 t = s.one("select * from tasks where id = ?", tid)
+if auto:
+    routed = [json.loads(e["data"]) for e in s.q("select data from events where task = ? and kind = 'routed'", tid)]
+    used = s.one("select model, effort from attempts where task = ?", tid)
+    print("routed:", routed, "| ran with:", (used["model"] or "default", used["effort"] or "default") if used else None)
 print(f"{agent}: {t['status']} in {time.time() - t0:.0f}s | {t['note']}")
 for e in s.q("select attempt, kind, data from events where task = ? order by id", tid):
     print(" ", e["attempt"], e["kind"], e["data"][:240])

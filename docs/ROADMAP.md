@@ -141,6 +141,13 @@ Agent Runner ของ local model สร้างและทดสอบแล
 เพิ่ม Team/Debate, dynamic scheduling, capability matching, adversarial review, multi-project scheduling และ A2A bridge เมื่อมี use case ที่พิสูจน์แล้ว
 ค่อยขยาย UI/พิจารณา desktop wrapper; framework ยังไม่ล็อก
 
+### Phase 5 status — quota-aware routing
+
+งานที่สร้างด้วย agent `auto` (`navis-cli add -a auto`, ตัวเลือก **Auto** ในฟอร์ม) ไปที่ agent แรกใน pool (`[routing] pool`, ค่าเริ่มต้น claude → codex; ตั้งลำดับได้ใน Settings หรือ `navis-cli routing --first codex`) ที่ login แล้ว ไม่ติด cooldown และมี slot ว่าง; ถ้า agent นั้นชน quota งานจะถูกจัดไปอีก agent ทันทีแทนที่จะรอ (ไม่นับเป็น retry); ถ้าไม่มี agent พร้อม งานค้าง QUEUED พร้อมเหตุผลของแต่ละตัวใน GUI; งานที่ระบุ agent ไม่ถูกย้ายเลย; review แบบ auto เลี่ยง agent ที่เขียนงานนั้นถ้ามีตัวอื่น; local model ไม่ถูกเลือกอัตโนมัติ; model/effort ตั้งกับ `auto` ไม่ได้ (ต้องรู้ agent ก่อน) ใช้ค่าจาก `[agents]`
+ทุกการตัดสินใจบันทึกเป็น event `routed` (agent ที่เลือก + ตัวที่ข้ามและเหตุผล)
+ยืนยัน: เทสต์ 11 ข้อ (ทดสอบแล้วว่าทำลายกติกาแต่ละข้อแล้วเทสต์ล้ม), agent จริงที่ค่าต่ำสุด — ปกติไป Claude (Haiku/low), เมื่อจำลองว่า Claude cooling ไป Codex จริง (`python3 probes/adapter.py auto`) **ยังไม่ได้ทดสอบการชน quota จริง** (ไม่เผา quota เพื่อทดสอบ; เส้นทางนี้ผ่านกับ agent จำลองที่พิมพ์ข้อความ rate limit เท่านั้น และ `QUOTA_RE` ยังเป็น pattern ทั่วไป)
+ข้อจำกัด: ลำดับ pool คือความชอบของผู้ใช้ ไม่ได้เลือกตามความสามารถหรือขนาดงาน (ยังไม่มีหลักฐานว่า agent ใดดีกว่าในงานแบบไหน — ดู [Phase 3](PHASE3.md))
+
 ## Phase 6 — Remote control
 
 เป็นงานในอนาคต ไม่อยู่ใน MVP

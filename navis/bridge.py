@@ -13,11 +13,10 @@ import threading
 import tomllib
 from pathlib import Path
 
-from . import agent_options, integrate, runtime, sandbox
+from . import agent_options, integrate, routing, runtime, sandbox
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
-LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
 PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
              ("codex", "Codex", "Codex CLI adapter (unverified)"),
              ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"),
@@ -103,10 +102,7 @@ class Bridge:
         return out
 
     def logged_in(self, name):
-        if name == "local":  # no login: a role the user switches on in config.toml
-            return bool(self.rt.cfg["local"]["coding"])
-        f = LOGIN_FILE.get(name)
-        return not f or (runtime.data_dir() / "agents" / name / f).exists()
+        return routing.logged_in(self.rt.cfg, runtime.data_dir(), name)
 
     def providers(self, busy, cool):
         slots, out = self.rt.cfg["slots"], []
@@ -234,6 +230,10 @@ class Bridge:
             if dep and dep["status"] != "COMPLETED":
                 reasons.append({"code": "dependency", "task_id": str(dep["id"]),
                                 "message": f"Waiting for task {dep['id']} to complete (it is {dep['status']})"})
+            if t["agent"] == "auto":
+                choice, skipped = routing.choose(t, self.rt.cfg, c["running"], c["cool"], c["now"], runtime.data_dir())
+                if not choice:
+                    reasons.append({"code": "routing", "message": "No agent can start this yet: " + "; ".join(f"{a} {why}" for a, why in skipped.items())})
             reasons = reasons or [{"code": "ready", "message": "Ready for the next dispatch tick"}]
         elif state == "WAITING_QUOTA":
             reasons.append({"code": "cooldown", "until": c["cool"].get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
@@ -242,7 +242,7 @@ class Bridge:
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
                        "expires": t["updated"] + 86400, "payload_hash": ""}
         return {
-            "model": t["model"], "effort": t["effort"], "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "routing": t["routing"], "model": t["model"], "effort": t["effort"], "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -281,6 +281,7 @@ class Bridge:
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
                 "integration": self.integration(), "agent_options": self.agent_options(),
+                "routing": {"pool": routing.pool(self.rt.cfg)},
                 "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
                 "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
                               "memory_available": True, "mode": "real"},
@@ -343,6 +344,13 @@ class Bridge:
             return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
+        if action == "set_routing":
+            try:
+                pool = routing.save_first(runtime.config_dir() / "config.toml", p.get("first"))
+            except ValueError as e:
+                raise ControlError(str(e))
+            self.rt.cfg["routing"]["pool"] = pool
+            return {"ok": True, "message": "Auto tries " + " then ".join(pool) + ". Applies to tasks that have not started."}
         if action == "set_agent_options":
             return self.set_agent_options(p)
         if action == "verify_integration":
