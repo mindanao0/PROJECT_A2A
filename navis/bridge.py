@@ -13,7 +13,7 @@ import threading
 import tomllib
 from pathlib import Path
 
-from . import agent_options, integrate, runtime, sandbox
+from . import agent_options, integrate, runtime, sandbox, usage
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
@@ -86,6 +86,12 @@ class Bridge:
         self.diffs = {}
         self.integrating = {}  # project -> task id, while its checks run in a background thread
         self.lock = threading.Lock()
+        self.limits, self.limits_at = {}, 0.0  # subscription windows per agent, refreshed in the background
+
+    def refresh_limits(self):
+        home = runtime.data_dir() / "agents"
+        self.limits = {"claude": usage.claude_limits(home / "claude", runtime.data_dir() / "claude-limits.json"),
+                       "codex": usage.codex_limits(home / "codex")}
 
     def close(self):
         if self.runner:
@@ -121,6 +127,7 @@ class Bridge:
             ok, until = self.logged_in(pid), cool.get(pid)
             until = until if until and until > time.time() else None
             out.append({"id": pid, "name": name, "ok": ok, "slots_used": busy.get(pid, 0), "slot_limit": slots.get(pid, 1),
+                        "limits": self.limits.get(pid),
                         "status": "Unavailable" if not ok else "Cooldown" if until else "Busy" if busy.get(pid) else "Ready",
                         "cooldown_until": until, "capability": desc,
                         "reason": ("Local coding is off" if pid == "local" else "Not logged in") if not ok else None,
@@ -301,6 +308,9 @@ class Bridge:
 
     def snapshot(self, cursor=0):
         s, c = self.store, self.context()
+        if c["now"] - self.limits_at > 60:  # at most once a minute, never blocking the poll
+            self.limits_at = c["now"]
+            threading.Thread(target=self.refresh_limits, daemon=True).start()
         slots = self.rt.cfg["slots"]
         proj_of = {t["id"]: t["project"] for t in c["rows"]}
         evs = list(s.q("select * from events where id > ? order by id limit 300", cursor))

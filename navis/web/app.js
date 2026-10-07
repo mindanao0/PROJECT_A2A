@@ -266,11 +266,23 @@ function providerRow(item) {
   const status=['Ready','Busy','Cooldown','Unavailable','Not tested','Not connected','Error'].includes(reported)?reported:'Unavailable';
   const slotText=p?.slot_limit!=null?`${p.slots_used??0} / ${p.slot_limit} slots`:p?.reason||(simulation()?'Disabled':'No runtime status');
   const sub=`${escapeHTML(slotText)}${until?`<br>${timer(Number(until))}`:''}`;
-  return agentRow(escapeHTML(item.name),escapeHTML(item.desc),item.mark,status,p?.id==='fake'?'fake':status.toLowerCase(),sub);
+  return agentRow(escapeHTML(item.name),escapeHTML(item.desc),item.mark,status,p?.id==='fake'?'fake':status.toLowerCase(),sub)+limitBars(p);
 }
 function providerCard(item) {
   const p=item.provider;
   return `<section class="panel agent-card">${providerRow(item)}<div class="capability-list"><span class="capability">${escapeHTML(p?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(p?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;
+}
+// What is left of the subscription's 5-hour and weekly windows (the providers report percent used, not tokens).
+function limitBars(p) {
+  const l = p?.limits; if (!l?.windows?.length) return '';
+  const now = Date.now()/1000 + clockOffset;
+  const rows = l.windows.map(w => {
+    const reset = w.resets_at && w.resets_at < now, left = reset ? 100 : Math.max(0, Math.min(100, 100 - w.used));
+    const when = reset ? 'window reset' : w.resets_at ? `resets ${new Date(w.resets_at*1000).toLocaleString([], w.window==='5h'?{hour:'2-digit',minute:'2-digit'}:{weekday:'short',hour:'2-digit',minute:'2-digit'})}` : 'not started';
+    return `<div class="limit-row"><span class="limit-name">${escapeHTML(w.window)}</span><meter min="0" max="100" low="20" high="50" optimum="100" value="${left}" aria-label="${escapeHTML(w.window)} left"></meter><span>${Math.round(left)}% left · ${escapeHTML(when)}</span></div>`;
+  }).join('');
+  const age = now - l.as_of;
+  return `<div class="limits">${rows}<small>${age > 600 ? `as of ${ago(age)} ago · updates when ${escapeHTML(p.name)} runs` : `as of ${ago(age)} ago`}</small></div>`;
 }
 function agentPanel() {
   const rows=providerItems().map(providerRow).join('');

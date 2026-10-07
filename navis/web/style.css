@@ -365,3 +365,8 @@ pre.conversation { white-space: pre-wrap; max-height: 70vh; overflow: auto; }
 .log-tool { color: #ffb4a8; }
 .log-result { color: #7d7070; }
 .log-status { color: var(--accent-soft); font-weight: 600; }
+/* Subscription windows under each agent in the fleet */
+.limits { margin: -4px 0 10px 46px; display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.limit-row { display: grid; grid-template-columns: 40px minmax(80px, 160px) 1fr; gap: 10px; align-items: center; }
+.limit-name { font-family: var(--mono); color: var(--text); }
+.limit-row meter { width: 100%; height: 10px; }

@@ -37,6 +37,7 @@ navis                               # เปิด GUI (ถ้ารันอย
   ```
 
   ใช้ได้ทั้งงานและ chat; ห้าม home ทั้งก้อน, state ของ Navis, ตัว repo เอง และ folder credential เช่น `~/.ssh`
+- Agent fleet (หน้า Overview) แสดง limit ที่เหลือของ subscription ช่วง 5 ชม. และรายสัปดาห์ของ Claude/Codex เป็น % (provider ไม่บอกเป็นจำนวน token): Claude อ่านสดทุกนาทีขณะ login ของมันยังไม่หมดอายุ (อายุ 8 ชม. หลัง Claude รันครั้งล่าสุด) นอกนั้นแสดงค่าล่าสุด; Codex เป็นค่าหลัง turn ล่าสุดที่รันผ่าน Navis
 - งานที่กำลังวิ่ง: การ์ดและหน้า task บอก “running 3m · last output 5s ago” และเปิดแท็บ Agent output ให้เองซึ่งอัปเดตสด; เงียบเกิน 5 นาทีจะเตือนให้เข้าไปดู
 
 ### ให้รันตลอด (ทำเครื่องนี้เป็น server)
