@@ -121,9 +121,9 @@ function integrationStrip() {
   if (simulation()) return '';
   return (snapshot.integration||[]).filter(i=>project==='all'||i.project_id===project).map(i=>{
     const checks=i.checks.map(c=>`${escapeHTML(c.name)} ${c.rc?'✗':'✓'}`).join(', ')||'no checks configured';
-    const detail=i.busy?`checking the merged commit for task ${escapeHTML(i.busy)}…`:`${i.tasks.length} task${i.tasks.length===1?'':'s'} merged at ${escapeHTML((i.commit||'').slice(0,10))} / checks on this exact commit: ${checks}`;
+    const detail=i.busy?`${i.busy==='verify'?'running every check on the merged commit…':`checking the merged commit for task ${escapeHTML(i.busy)}…`}`:`${i.tasks.length} task${i.tasks.length===1?'':'s'} merged at ${escapeHTML((i.commit||'').slice(0,10))} / checks on this exact commit: ${checks}`;
     const why=!i.busy&&!i.can_promote&&i.reason?`<br><small class="muted">${escapeHTML(i.reason)}</small>`:'';
-    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.review_needed&&!i.busy?`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" ${snapshot.capabilities?.handoff?.claude_review===true?'':'disabled title="Claude is not logged in."'}>Review with Claude</button>`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
+    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.verify_needed&&!i.busy?`<button class="button secondary" data-verify-integration="${escapeHTML(i.project_id)}">Run all checks</button>`:''}${i.review_needed&&!i.busy?`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" ${snapshot.capabilities?.handoff?.claude_review===true?'':'disabled title="Claude is not logged in."'}>Review with Claude</button>`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
   }).join('');
 }
 function agentRow(name, desc, mark, status, className='', sub='') {
@@ -279,6 +279,7 @@ function updateDetail(force=false) {
     controls.push(`<button class="button secondary" data-action="continue_with_codex" ${handoff.codex_continue===true?'':'disabled title="Codex continuation is unavailable until the runtime reports a logged-in adapter."'}>Continue with Codex</button>`);
   }
   if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
   const latestReview = (task.reviews||[])[0];
   if (!simulation()&&task.state==='COMPLETED'&&task.kind!=='review'&&latestReview&&latestReview.verdict==='changes'&&!latestReview.stale) controls.push('<button class="button primary" data-action="revise" title="Queue a bounded follow-up round that starts from this result and carries the reviewer findings.">Revise from review</button>');
   if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
@@ -363,6 +364,13 @@ document.addEventListener('click',async e=>{
     const result=await command({action:'discard_integration',project_id:i.project_id,commit:i.commit});
     if (result) toast(result.message||'Integration branch discarded.');
     discardBtn.disabled=false; return;
+  }
+  const verifyInt = e.target.closest('[data-verify-integration]'); if (verifyInt) {
+    if (!connected||verifyInt.disabled) return;
+    verifyInt.disabled=true;
+    const result=await command({action:'verify_integration',project_id:verifyInt.dataset.verifyIntegration});
+    if (result) toast(result.message||'Running every check.');
+    verifyInt.disabled=false; return;
   }
   const reviewInt = e.target.closest('[data-review-integration]'); if (reviewInt) {
     if (!connected||reviewInt.disabled) return;

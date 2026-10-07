@@ -35,7 +35,7 @@ class Store:
         try:
             c.executescript(SCHEMA)
             for table, cols in (("tasks", (("kind", "text not null default ''"), ("target", "integer"), ("after", "integer"),
-                                           ("parent", "integer"), ("round", "integer not null default 0"))),
+                                           ("parent", "integer"), ("round", "integer not null default 0"), ("checks", "text"))),
                                 ("attempts", (("prompt_bytes", "integer"), ("usage", "text")))):
                 have = {r["name"] for r in c.execute(f"pragma table_info({table})")}
                 for col, ddl in cols:
