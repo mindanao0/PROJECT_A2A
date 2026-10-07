@@ -45,13 +45,15 @@ Phase 2 เพิ่ม `delegate(title, spec, scope)` ส่วนการข�
 | --- | --- | --- | --- |
 | process ของ agent CLI | ออกได้ เพราะต้องคุยกับ provider | ไม่จำกัดใน MVP (limitation ที่ยอมรับ) | — |
 | คำสั่งของ Codex | ไม่มี | Codex sandbox `workspace-write` | verified ผ่าน `codex sandbox -P :workspace`; เส้นทาง `codex exec` รอ §10 |
-| คำสั่งของ Claude | ไม่มี | ปิด Bash, WebFetch, WebSearch และ subagent tool; รันได้เฉพาะ `run_check` | รอ §10 |
+| คำสั่งของ Claude | ไม่มี | ปิด Bash และ subagent tool; รันได้เฉพาะ `run_check` | รอ §10 |
+| ค้นเว็บ/อ่านหน้าเว็บของ agent | มี (ปิดได้) | `[agents] web = true` (ค่าเริ่มต้น): Claude ได้ WebSearch/WebFetch, Codex ได้ `--search`; `web = false` = ปิดทั้งคู่ | — |
 | `run_check` / verifier | ไม่มี | bwrap `--unshare-net` | verified |
 | `prepare` (ติดตั้ง dependency) | มี | step แยก; auto-allow เฉพาะเมื่อ lockfile ไม่เปลี่ยนจาก base นอกนั้น WAITING_APPROVAL | — |
 
 - Claude ใช้ `--permission-mode acceptEdits`, `--allowedTools` เฉพาะ Read/Edit/Write/Glob/Grep และ `mcp__navis`, ส่วน tool อื่น disallow; ตรวจรายการ tool จริงจาก init event ของ stream
 - Check ใช้ dependency ที่ `prepare` ติดตั้งไว้แบบ offline (VELA: `uv run --offline --frozen`); uv cache bind แบบ rw เฉพาะตอน `prepare`
-- Web research ของ agent ไม่อยู่ใน MVP
+- Web research: เปิดตามคำขอผู้ใช้ (2026-10-07) ผ่าน tool ค้น/อ่านเว็บของ CLI เท่านั้น; คำสั่งของ agent และ checks ยังไม่มีเน็ต ความเสี่ยงที่ยอมรับ: หน้าเว็บอาจมีคำสั่งแฝง (prompt injection) และ agent อาจส่งโค้ดออกผ่าน URL ได้ ปิดด้วย `[agents] web = false`
+- Folder นอก repo: `[sandbox] rw = [...]` ในไฟล์ project bind แบบเขียนได้ให้ attempt และ chat (+`--add-dir` ให้ CLI) แก้แบบสดโดยไม่ผ่าน diff/review/apply และ Navis ย้อนให้ไม่ได้; ปฏิเสธ home หรือสูงกว่า, state ของ Navis, ตัว repo เอง และ folder credential (`.ssh`, `.gnupg`, `.aws`, …); review task ไม่ได้สิทธิ์นี้
 
 ## 3. Credentials
 

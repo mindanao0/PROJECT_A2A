@@ -348,13 +348,20 @@ kbd { display: inline-block; padding: 2px 5px; border: 1px solid #713131; border
 .chat-bar input { flex: 1; min-width: 200px; margin: 0; }
 .chat-bar select { margin: 0; max-width: 260px; }
 .chat-keys .button { min-width: 56px; padding: 6px 10px; }
-#chat-screen { background: #000; border: 1px solid var(--line); padding: 14px; margin: 0; height: 640px; overflow: auto; font: 13px/1.35 var(--mono); white-space: pre; color: var(--text); }
+.chat-term { background: #050505; border: 1px solid var(--line); padding: 8px; height: min(640px, 70vh); min-height: 280px; overflow: hidden; color: var(--muted); font: 13px var(--mono); }
 .chat-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
 .chat-tab { display: inline-flex; border: 1px solid var(--line); background: var(--panel2); }
 .chat-tab.active { border-color: var(--accent); background: var(--accent-dim); }
 .chat-tab button { background: transparent; color: var(--text); border: 0; padding: 7px 12px; font: 12px var(--mono); cursor: pointer; }
 .chat-tab button:last-child { padding: 7px 9px; color: var(--accent-soft); border-left: 1px solid var(--line); }
-#chat-screen:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+.chat-term:focus-within { border-color: var(--accent); }
 .chat-hint { margin: 6px 0 0; font-size: 12px; }
 .answer-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 .answer-options .button { text-align: left; white-space: normal; }
+/* Live progress and the readable agent log */
+.live-hint { color: var(--accent-soft); font-family: var(--mono); }
+pre.conversation { white-space: pre-wrap; max-height: 70vh; overflow: auto; }
+.log-text { color: var(--text); }
+.log-tool { color: #ffb4a8; }
+.log-result { color: #7d7070; }
+.log-status { color: var(--accent-soft); font-weight: 600; }

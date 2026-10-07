@@ -98,7 +98,7 @@ class Runtime(NavisTest):
         seen = []
         real = runtime.fake_cmd
 
-        def cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
+        def cmd(prompt, mcp, home, io, readonly=False, model="", effort="", **_):
             seen.append((model, effort))
             return real(prompt, mcp, home, io, readonly)
 

@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 (async () => {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'navis-gui-'));
-  const server = spawn(process.env.PYTHON || 'python3', ['-m','navis','--no-browser','--state-dir',folder], {stdio:'ignore'});
+  const server = spawn(process.env.PYTHON || 'python3', ['-m','navis','--sim','--no-browser','--state-dir',folder], {stdio:'ignore'});
   let browser;
   try {
     for (let i=0;i<100&&!fs.existsSync(path.join(folder,'launch.url'));i++) await wait(100);

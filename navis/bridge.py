@@ -17,7 +17,6 @@ from . import agent_options, integrate, runtime, sandbox
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
-LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
 PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
              ("codex", "Codex", "Codex CLI adapter (unverified)"),
              ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"),
@@ -25,11 +24,11 @@ PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
 SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4), ("slots.local", "Local model slots", 1, 2),
             ("slots.claude", "Claude Code slots", 1, 4), ("limits.attempt_timeout", "Attempt timeout (seconds)", 60, 86400))
 MAX_DIFF, MAX_LOG, MAX_PROMPT, MAX_DIFFS = 200_000, 30_000, 20_000, 64
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
          "leak": "LEAK", "stale-result-dropped": "STALE", "integrate": "INTEGRATE", "integrate-error": "INTEGRATE",
-         "promote": "PROMOTE", "review": "REVIEW", "integration-discarded": "INTEGRATE", "ask": "INPUT"}
+         "promote": "PROMOTE", "review": "REVIEW", "integration-discarded": "INTEGRATE", "ask": "INPUT",
+         "applied": "APPLY", "apply-error": "APPLY"}
 
 
 def message(kind, d):
@@ -52,6 +51,8 @@ def message(kind, d):
             "promote": lambda: f"Your branch {d.get('branch')} fast-forwarded to {str(d.get('commit'))[:10]}",
             "review": lambda: f"Review of task {d.get('target')} by {d.get('reviewer')}: {d.get('verdict')}",
             "integration-discarded": lambda: f"Integration branch discarded (was {str(d.get('commit'))[:10]}); tasks stay completed",
+            "applied": lambda: f"Written into {d.get('path')}: {', '.join(d.get('files') or [])}"[:300],
+            "apply-error": lambda: f"Not written into your folder: {d.get('error')}",
             }.get(kind, lambda: kind)()
 
 
@@ -111,7 +112,7 @@ class Bridge:
     def logged_in(self, name):
         if name == "local":  # no login: a role the user switches on in config.toml
             return bool(self.rt.cfg["local"]["coding"])
-        f = LOGIN_FILE.get(name)
+        f = runtime.LOGIN_FILE.get(name)
         return not f or (runtime.data_dir() / "agents" / name / f).exists()
 
     def providers(self, busy, cool):
@@ -167,7 +168,7 @@ class Bridge:
             return None
         if path.stat().st_size > 400_000:  # the tail starts mid-line
             raw = raw.split("\n", 1)[-1]
-        return runtime.readable_log(raw)[-MAX_LOG:]
+        return runtime.readable_log(raw, runtime.data_dir() / "attempts" / aid / "repo")[-MAX_LOG:]
 
     def exists(self, aid, name):
         return (runtime.data_dir() / "attempts" / aid / name).exists()
@@ -257,6 +258,13 @@ class Bridge:
             reasons = reasons or [{"code": "ready", "message": "Ready for the next dispatch tick"}]
         elif state == "WAITING_QUOTA":
             reasons.append({"code": "cooldown", "until": c["cool"].get(t["agent"], t["updated"]), "message": f"{t['agent']} quota cooldown"})
+        live = {}
+        if state in ("RUNNING", "CANCELLING") and aid:  # how long it runs and when the agent last wrote anything
+            try:
+                out = runtime.attempt_log(aid).stat().st_mtime
+            except OSError:
+                out = None
+            live = {"running_since": c["attempts"][tid][-1]["started"], "last_output": out}
         pending = None
         if state in ("WAITING_INPUT", "WAITING_APPROVAL"):  # REVIEW has no separate question; the UI shows the diff
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
@@ -278,7 +286,8 @@ class Bridge:
                          for a in c["attempts"].get(tid, [])],
             "instructions": [{"version": i + 1, "text": json.loads(e["data"])["text"], "time": e["at"]}
                              for i, e in enumerate(c["instr"].get(tid, []))],
-            "created_at": t["created"], "updated_at": max(t["updated"], c["touched"].get(tid, 0)),
+            "created_at": t["created"], "updated_at": max(t["updated"], c["touched"].get(tid, 0), live.get("last_output") or 0),
+            **live,
         }
 
     def event(self, r, projects, full):
@@ -297,7 +306,7 @@ class Bridge:
         evs = list(s.q("select * from events where id > ? order by id limit 300", cursor))
         last = s.one("select coalesce(max(id), 0) m from events")["m"]
         names = [p[0] for p in PROVIDERS]
-        return {"schema_version": 1, "mode": "real", "paused": c["paused"], "projects": self.projects(),
+        return {"schema_version": 1, "mode": "real", "now": c["now"], "paused": c["paused"], "projects": self.projects(),
                 "tasks": [self.task_view(t, c, False) for t in c["rows"]],
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
@@ -356,8 +365,8 @@ class Bridge:
         if action == "chat_start":
             if p.get("project_id") not in {x["id"] for x in self.projects()}:
                 raise ControlError("Unknown project")
-            if p.get("agent") not in ("claude", "codex"):
-                raise ControlError("Chat supports claude and codex")
+            if p.get("agent") not in ("claude", "codex", "shell"):
+                raise ControlError("Chat supports claude, codex and shell")
             label = p.get("label") or ""
             if not isinstance(label, str) or (label and not re.fullmatch(r"[A-Za-z0-9]{1,20}", label)):
                 raise ControlError("Chat name: 1-20 letters or digits")
@@ -373,18 +382,14 @@ class Bridge:
         if action == "chat_close":
             runtime.chat_close(p["session"])
             return {"ok": True}
-        if action == "chat_screen":
-            return {"screen": self.rt.redact(runtime.chat_screen(p["session"]))}
-        if action == "chat_send":
-            text = p.get("text")
-            if text is not None and (not isinstance(text, str) or len(text) > 2000 or "\0" in text):
-                raise ControlError("Text must be at most 2000 characters")
-            try:
-                runtime.chat_send(p["session"], text, p.get("key"), bool(p.get("enter")), bool(p.get("paste")))
-            except (ValueError, subprocess.CalledProcessError) as e:
-                raise ControlError(f"Could not send: {e}")
-            return {"ok": True}
         raise ControlError("Unknown chat action")
+
+    def chat_attach(self, session):
+        if session not in runtime.chat_sessions():
+            raise ControlError("Unknown chat session")
+        return runtime.chat_attach(session)
+
+    chat_resize = staticmethod(runtime.chat_resize)
 
     def chat_upload(self, session, ctype, data):
         if session not in runtime.chat_sessions():
@@ -473,6 +478,12 @@ class Bridge:
             out, ok = {"task_id": str(dup or rid), "duplicate": bool(dup)}, st == "COMPLETED"
         elif action == "integrate":
             out, ok = self.start_integrate(t), st == "COMPLETED"
+        elif action == "apply":
+            try:
+                files = runtime.apply_result(s, tid)
+            except (ValueError, subprocess.CalledProcessError) as e:
+                raise ControlError(str(e)[:600])
+            out, ok = {"ok": True, "message": f"Written into your project folder (uncommitted): {', '.join(files)}"[:300]}, True
         elif action in ("review_with_claude", "continue_with_codex"):
             out = self.hand_off(t, aid, "claude" if action == "review_with_claude" else "codex")
             ok = True
@@ -578,23 +589,11 @@ class Bridge:
         return {"task_id": str(dup or tid), "duplicate": bool(dup)}
 
     def create_project(self, p):
-        name = clean_text(p.get("name"), "Name", 60)
-        if not NAME_RE.match(name):
-            raise ControlError("Name may use letters, digits, '.', '_' and '-' only")
-        path = Path(os.path.expanduser(clean_text(p.get("path"), "Repository path", 1000))).resolve()
-        top = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], capture_output=True, text=True) if path.is_dir() else None
-        if not top or top.returncode or Path(top.stdout.strip()).resolve() != path:
-            raise ControlError("Path must be the root of a Git repository")
-        data = runtime.data_dir().resolve()
-        if path == data or data in path.parents or path in data.parents:
-            raise ControlError("Path overlaps Navis' own data directory")
-        f = runtime.config_dir() / "projects" / f"{name}.toml"
-        if f.exists():
-            raise ControlError("A project with this name already exists")
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(f"path = {json.dumps(str(path))}\nprotected = []\n\n[checks]\n# Add checks here, e.g. unit = \"python3 -m unittest\".\n"
-                     "# With no checks a finished task is not verified by anything.\n")
-        return {"id": name}
+        try:
+            f = runtime.create_project(clean_text(p.get("name"), "Name", 60), clean_text(p.get("path"), "Repository path", 1000))
+        except ValueError as e:
+            raise ControlError(str(e))
+        return {"id": f.stem}
 
     def update_settings(self, values):
         if not isinstance(values, dict):
