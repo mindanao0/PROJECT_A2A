@@ -74,6 +74,17 @@ async function controls() {
   await node('#task-form').onsubmit({preventDefault(){},currentTarget:form});
   assert.equal(context.submissions[0].source_attempt_id,'displayed-source','Source must bind to the displayed option rather than the latest snapshot');
 }
+// Agent model/effort settings: real mode only, escaped, current values selected.
+vm.runInContext(`globalThis.aop=agentOptionsPanel; snapshot={mode:'simulation',agent_options:{claude:{model:'x',effort:'low',efforts:['low'],models:[]}}};`,context);
+assert.equal(context.aop(),'','Simulation has no agent options panel');
+vm.runInContext(`snapshot={mode:'real',agent_options:{
+  claude:{model:'<b>x</b>',effort:'high',efforts:['low','medium','high'],models:['haiku','<i>m</i>']},
+  codex:{model:'',effort:'',efforts:['low'],models:[]}}};`,context);
+const panel = context.aop();
+assert(!panel.includes('<b>x</b>')&&!panel.includes('<i>m</i>'),'Model names must be escaped');
+assert(/<option selected>high<\/option>/.test(panel),'The configured effort is preselected');
+assert(panel.includes('name="claude_model"')&&panel.includes('name="codex_effort"'),'Both agents are editable');
+assert(panel.includes('<option value="">Default</option>'),'A blank means the CLI default');
 // Integration strip: real mode only, escaped, button enabled only when the runtime says it can promote.
 vm.runInContext(`
   project='all';

@@ -16,7 +16,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import sandbox, usage
+from . import agent_options, sandbox, usage
 from .store import Store
 
 # ponytail: generic pattern; replace with each CLI's real rate-limit text after the Phase 1b probes.
@@ -28,6 +28,7 @@ DEFAULTS = {
     "limits": {"agent_memory": "3G", "check_memory": "4G", "attempt_timeout": 3600,
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600],
                "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
+    "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": ""},  # "" = the CLI's default
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
     # Local coding is a role the user must switch on (D-004): off until the Agent Runner's tests are trusted.
     "local": {"coding": False, "url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "max_turns": 20,
@@ -113,23 +114,24 @@ def _which(name):
     return Path(exe).resolve()
 
 
-def fake_cmd(prompt, mcp, home, io, readonly=False):
+def fake_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
     return ([sandbox.PY, "-m", "navis.fake_agent", prompt],
             {"NAVIS_MCP": json.dumps(mcp), "NAVIS_AGENT_HOME": str(home)}, [])
 
 
-def codex_cmd(prompt, mcp, home, io, readonly=False):
+def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
     # Unverified until Phase 1b (D-013).
     exe = _which("codex")
     argv = [str(exe), "exec", "--json", "--sandbox", "read-only" if readonly else "workspace-write",
             "-c", f"mcp_servers.navis.command={json.dumps(mcp[0])}",
             "-c", f"mcp_servers.navis.args={json.dumps(mcp[1:])}",
             # `exec` never asks, so MCP calls fail ("requires approval") unless pre-approved; only our own tools.
-            "-c", 'mcp_servers.navis.default_tools_approval_mode="approve"', prompt]
+            "-c", 'mcp_servers.navis.default_tools_approval_mode="approve"',
+            *agent_options.flags("codex", model, effort), prompt]
     return argv, {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
 
 
-def claude_cmd(prompt, mcp, home, io, readonly=False):
+def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
     # Unverified until Phase 1b (D-013). No Bash: commands only through run_check.
     exe = _which("claude")
     cfg = io / "mcp.json"
@@ -139,11 +141,11 @@ def claude_cmd(prompt, mcp, home, io, readonly=False):
             "--mcp-config", str(cfg), "--strict-mcp-config", "--permission-mode", "acceptEdits",
             "--tools", tools,  # default-deny: the built-in set also has Cron/RemoteTrigger/...
             "--allowedTools", f"{tools},mcp__navis",
-            "--disallowedTools", "Bash,WebFetch,WebSearch,Task"]
+            "--disallowedTools", "Bash,WebFetch,WebSearch,Task", *agent_options.flags("claude", model, effort)]
     return argv, {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
 
 
-def local_cmd(prompt, mcp, home, io, readonly=False):
+def local_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):  # the local model is set under [local]
     cfg = load_config()["local"]
     env = {"NAVIS_MCP": json.dumps(mcp), "NAVIS_LOCAL_URL": cfg["url"], "NAVIS_LOCAL_MODEL": cfg["model"],
            "NAVIS_LOCAL_MAX_TURNS": str(cfg["max_turns"]), "NAVIS_LOCAL_MAX_TOKENS": str(cfg["max_tokens"]),
@@ -157,7 +159,7 @@ ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd, "local":
 # User commands
 
 def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", source=None, kind="", target=None,
-             after=None, parent=None, round=0, checks=None):
+             after=None, parent=None, round=0, checks=None, model=None, effort=None):
     """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
@@ -167,6 +169,9 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", sourc
     scope = norm_scope(scope)
     sha = subprocess.run(["git", "-C", proj["path"], "rev-parse", "--verify", f"{base}^{{commit}}"],
                          capture_output=True, text=True, check=True).stdout.strip()
+    if model or effort:  # a per-task override of the [agents] setting
+        model, effort = agent_options.validate(agent, model, effort)
+    model, effort = model or None, effort or None
     if checks is not None:  # a task may be verified by a subset of the project's checks (integration still runs all)
         unknown = [c for c in checks if c not in proj["checks"]]
         if unknown or not checks:
@@ -175,14 +180,15 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", sourc
         dep = store.one("select project, kind from tasks where id = ?", after)
         if not dep or dep["project"] != project or dep["kind"] == "review":
             raise ValueError("after must be an implementation task in the same project")
-    salt = (f"+after{after}" if after is not None else "") + (f"+checks{','.join(checks)}" if checks else "")
+    salt = ((f"+after{after}" if after is not None else "") + (f"+checks{','.join(checks)}" if checks else "")
+            + (f"+model{model}" if model else "") + (f"+effort{effort}" if effort else ""))
     key, now = task_key(project, spec, scope, sha + salt), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks)"
-                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?)",
+        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks, model, effort)"
+                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?,?)",
                          project, agent, spec, title or spec.strip().splitlines()[0][:80],
                          json.dumps(source) if source else "", json.dumps(scope), key, sha, now, now, kind, target,
-                         after, parent, round, json.dumps(checks) if checks else None)
+                         after, parent, round, json.dumps(checks) if checks else None, model, effort)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -257,7 +263,9 @@ def revise(store, tid, agent=None):
     source = {"task_id": str(tid), "attempt_id": last["id"] if last else None, "title": title,
               "artifacts": [{"name": "result commit", "hash": t["head"]}]}
     rid, dup = add_task(store, t["project"], agent or t["agent"], t["spec"], json.loads(t["scope"]), t["head"],
-                        f"Revise: {title}"[:120], source, round=t["round"] + 1)
+                        f"Revise: {title}"[:120], source, round=t["round"] + 1,
+                        model=t["model"] if (agent or t["agent"]) == t["agent"] else None,
+                        effort=t["effort"] if (agent or t["agent"]) == t["agent"] else None)
     if rid:
         store.x("update tasks set context = ? where id = ?",
                 f"Reviewer findings on your previous result (revision round {t['round'] + 1} of {limit}); "
@@ -477,7 +485,10 @@ class Runtime:
         mcp = [sandbox.PY, str(sandbox.PKG / "mcp.py"), str(sock)]
         prompt = self._prompt(t, n, proj)
         (adir / "prompt.txt").write_text(prompt)  # shown in the GUI; outside io, so the agent cannot read it
-        argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io, readonly=t["kind"] == "review")
+        model, effort = agent_options.effective(self.cfg, t["agent"], t["model"], t["effort"])
+        s.x("update attempts set model = ?, effort = ? where id = ?", model or None, effort or None, aid)
+        s.log(tid, aid, "settings", model=model or "default", effort=effort or "default")
+        argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io, readonly=t["kind"] == "review", model=model, effort=effort)
         env["NAVIS_ATTEMPT"] = str(n)
         # io (socket, MCP config) is read-only: connect() still works, replacing them does not.
         box = sandbox.bwrap(repo, rw=[repo, home], ro=[*ro, str(io), *extra_ro], env=env)

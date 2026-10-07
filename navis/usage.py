@@ -43,7 +43,7 @@ def parse(agent, text):
 def report(store, since=0.0, project=None):
     """Rows per (agent, kind): attempts, outcomes, wall seconds, prompt bytes and the usage the CLIs exposed."""
     rows = defaultdict(lambda: {"attempts": 0, "outcomes": defaultdict(int), "seconds": 0.0, "prompt_bytes": 0,
-                                "input": 0, "cached": 0, "output": 0, "cost_usd": 0.0, "with_usage": 0})
+                                "input": 0, "cached": 0, "output": 0, "cost_usd": 0.0, "with_usage": 0, "settings": set()})
     for a in store.q("select a.*, t.agent, t.kind, t.project from attempts a join tasks t on t.id = a.task"
                      " where a.started >= ? and a.status = 'ended'", since):
         if project and a["project"] != project:
@@ -53,10 +53,11 @@ def report(store, since=0.0, project=None):
         r["outcomes"][a["outcome"] or "?"] += 1
         r["seconds"] += (a["ended"] or a["started"]) - a["started"]
         r["prompt_bytes"] += a["prompt_bytes"] or 0
+        r["settings"].add(f"{a['model'] or 'default'}/{a['effort'] or 'default'}")
         u = json.loads(a["usage"]) if a["usage"] else None
         if u:
             r["with_usage"] += 1
             for k in ("input", "cached", "output"):
                 r[k] += u[k]
             r["cost_usd"] += u["cost_usd"] or 0.0
-    return {k: v | {"outcomes": dict(v["outcomes"])} for k, v in sorted(rows.items())}
+    return {k: v | {"outcomes": dict(v["outcomes"]), "settings": sorted(v["settings"])} for k, v in sorted(rows.items())}

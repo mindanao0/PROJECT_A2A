@@ -13,7 +13,7 @@ import threading
 import tomllib
 from pathlib import Path
 
-from . import integrate, runtime, sandbox
+from . import agent_options, integrate, runtime, sandbox
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
@@ -242,7 +242,7 @@ class Bridge:
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
                        "expires": t["updated"] + 86400, "payload_hash": ""}
         return {
-            "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "model": t["model"], "effort": t["effort"], "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -280,13 +280,30 @@ class Bridge:
                 "tasks": [self.task_view(t, c, False) for t in c["rows"]],
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
-                "integration": self.integration(),
+                "integration": self.integration(), "agent_options": self.agent_options(),
                 "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
                 "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
                               "memory_available": True, "mode": "real"},
                 "capabilities": {"fake": "scripted, sandboxed", "codex": "unverified", "claude": "unverified", "local": "not connected",
                                  "controls": {"graceful_stop": False},
                                  "handoff": {"claude_review": self.logged_in("claude"), "codex_continue": self.logged_in("codex")}}}
+
+    def agent_options(self):
+        """Per agent: the configured model/effort ('' = the CLI default) and what the GUI may offer."""
+        cfg = self.rt.cfg["agents"]
+        return {a: {"model": cfg[f"{a}_model"], "effort": cfg[f"{a}_effort"], "efforts": list(agent_options.EFFORTS[a]),
+                    "models": agent_options.known_models(a, runtime.data_dir() / "agents")}
+                for a in agent_options.AGENTS}
+
+    def set_agent_options(self, p):
+        agent = p.get("agent")
+        try:
+            model, effort = agent_options.save(runtime.config_dir() / "config.toml", agent, str(p.get("model") or ""),
+                                               str(p.get("effort") or ""))
+        except ValueError as e:
+            raise ControlError(str(e))
+        self.rt.cfg["agents"].update({f"{agent}_model": model, f"{agent}_effort": effort})
+        return {"ok": True, "message": f"{agent}: model {model or 'default'}, effort {effort or 'default'}. Applies to attempts that start from now on."}
 
     def integration(self):
         out = []
@@ -326,6 +343,8 @@ class Bridge:
             return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
+        if action == "set_agent_options":
+            return self.set_agent_options(p)
         if action == "verify_integration":
             if p.get("project_id") not in {x["id"] for x in self.projects()}:
                 raise ControlError("Unknown project")
@@ -486,7 +505,8 @@ class Bridge:
         try:
             tid, dup = runtime.add_task(self.store, project, p.get("agent") or "fake",
                                         clean_text(p.get("spec"), "Task description"), normalize_scope(p.get("scope")),
-                                        base, clean_text(p.get("title"), "Title", 120), source, after=after)
+                                        base, clean_text(p.get("title"), "Title", 120), source, after=after,
+                                        model=str(p.get("model") or "") or None, effort=str(p.get("effort") or "") or None)
         except (ValueError, subprocess.CalledProcessError) as e:
             raise ControlError(f"Cannot queue task: {e}"[:300])
         return {"task_id": str(dup or tid), "duplicate": bool(dup)}

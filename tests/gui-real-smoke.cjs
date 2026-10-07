@@ -56,6 +56,28 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.notEqual(git('rev-parse', 'HEAD').trim(), before);
     assert.equal(git('show', 'HEAD:src/x.py'), 'x = 1\n');
     assert.equal(git('status', '--porcelain').trim(), '');
+    // Model and effort: set in Settings, saved to config.toml, offered again after a reload.
+    await page.locator('.sidebar [data-view="settings"]').click();
+    await page.locator('#agent-options-form [name="claude_model"]').fill('haiku');
+    await page.locator('#agent-options-form [name="claude_effort"]').selectOption('low');
+    await page.getByRole('button', {name: 'Save model and effort', exact: true}).click();
+    await page.getByText('Model and effort saved').waitFor();
+    const saved = fs.readFileSync(path.join(root, 'cfg', 'config.toml'), 'utf8');
+    assert(/claude_model = "haiku"/.test(saved) && /claude_effort = "low"/.test(saved), 'config.toml must hold the setting: ' + saved);
+    await page.reload();
+    await page.locator('.sidebar [data-view="settings"]').click();
+    assert.equal(await page.locator('#agent-options-form [name="claude_effort"]').inputValue(), 'low');
+    await page.locator('#agent-options-form [name="claude_effort"]').selectOption('ultra').catch(() => {});  // not offered for claude
+    await page.locator('#agent-options-form [name="codex_effort"]').selectOption('ultra');  // offered for codex
+    // the new-task form offers the selected agent's model suggestions and effort levels
+    await page.getByRole('button', {name: '+ New task', exact: true}).click();
+    await page.locator('#task-agent').selectOption('claude');
+    assert.equal(await page.locator('#task-model-row').isVisible(), true);
+    assert.equal(await page.locator('#task-model').getAttribute('placeholder'), 'default: haiku');
+    assert((await page.locator('#task-effort option').allInnerTexts()).includes('Default (low)'));
+    await page.locator('#task-agent').selectOption('fake');
+    assert.equal(await page.locator('#task-model-row').isVisible(), false);
+    await page.locator('#task-dialog [data-close="task-dialog"]').first().click();
     for (const view of ['overview', 'tasks', 'agents', 'activity', 'artifacts', 'resources', 'settings']) {  // every page still renders
       await page.locator(`.sidebar [data-view="${view}"]`).click();
       assert(await page.locator('#content').innerText().then(x => x.trim().length > 20), `view ${view} rendered nothing`);
