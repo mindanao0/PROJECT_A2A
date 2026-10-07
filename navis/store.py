@@ -35,8 +35,10 @@ class Store:
         try:
             c.executescript(SCHEMA)
             for table, cols in (("tasks", (("kind", "text not null default ''"), ("target", "integer"), ("after", "integer"),
-                                           ("parent", "integer"), ("round", "integer not null default 0"), ("checks", "text"))),
-                                ("attempts", (("prompt_bytes", "integer"), ("usage", "text")))):
+                                           ("parent", "integer"), ("round", "integer not null default 0"), ("checks", "text"),
+                                           ("model", "text"), ("effort", "text"))),
+                                ("attempts", (("prompt_bytes", "integer"), ("usage", "text"),
+                                              ("model", "text"), ("effort", "text")))):
                 have = {r["name"] for r in c.execute(f"pragma table_info({table})")}
                 for col, ddl in cols:
                     if col not in have:  # databases created before the column existed

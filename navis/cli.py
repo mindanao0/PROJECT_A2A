@@ -5,7 +5,7 @@ import json
 import sys
 import time
 
-from . import helper, integrate, retention, runtime, usage
+from . import agent_options, helper, integrate, retention, runtime, usage
 
 
 def show_tasks(store):
@@ -39,6 +39,8 @@ def main(argv=None):
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
     a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
+    a.add_argument("--model", help="model for this task only (default: the [agents] setting, else the CLI default)")
+    a.add_argument("--effort", help="effort for this task only")
     a.add_argument("--check", action="append", dest="checks", metavar="NAME",
                    help="verify this task with only these project checks (repeatable); integration still runs all")
     a.add_argument("spec", help="task text, or - to read it from stdin")
@@ -67,6 +69,10 @@ def main(argv=None):
     g.add_argument("--days", type=int, help="default: [limits] retention_days (30)")
     g.add_argument("--dry-run", action="store_true")
     sub.add_parser("verify-integration", help="run every check on a project's integration commit").add_argument("project")
+    ao = sub.add_parser("agent-options", help="show or set the model and effort an agent runs with (empty = the CLI default)")
+    ao.add_argument("agent", nargs="?", choices=agent_options.AGENTS)
+    ao.add_argument("--model")
+    ao.add_argument("--effort")
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -79,7 +85,7 @@ def main(argv=None):
         spec = sys.stdin.read() if args.spec == "-" else args.spec
         try:
             tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after,
-                                          checks=args.checks)
+                                          checks=args.checks, model=args.model, effort=args.effort)
         except ValueError as e:
             sys.exit(str(e))
         if dup:
@@ -130,15 +136,29 @@ def main(argv=None):
             print(f"discarded integration branch at {integrate.discard(store, args.project)[:10]}")
         except integrate.IntegrationError as e:
             sys.exit(str(e))
+    elif args.cmd == "agent-options":
+        if args.agent and (args.model is not None or args.effort is not None):
+            cur = runtime.load_config()["agents"]
+            try:
+                m, e = agent_options.save(runtime.config_dir() / "config.toml", args.agent,
+                                          cur[f"{args.agent}_model"] if args.model is None else args.model,
+                                          cur[f"{args.agent}_effort"] if args.effort is None else args.effort)
+            except ValueError as err:
+                sys.exit(str(err))
+        cfg = runtime.load_config()
+        for agent in ([args.agent] if args.agent else agent_options.AGENTS):
+            m, e = agent_options.effective(cfg, agent)
+            print(f"{agent:<7} model {m or 'default':<28} effort {e or 'default':<8} "
+                  f"(efforts: {', '.join(agent_options.EFFORTS[agent])})")
     elif args.cmd == "usage":
         rep = usage.report(store, time.time() - args.hours * 3600, args.project)
         print(f"last {args.hours:g} h{' / ' + args.project if args.project else ''}")
-        print(f"{'AGENT':<7} {'KIND':<10} {'ATT':>3} {'OUTCOMES':<30} {'SECS':>6} {'PROMPT KB':>9} {'IN TOK':>9} {'CACHED':>9} {'OUT TOK':>8} {'COST $':>7}")
+        print(f"{'AGENT':<7} {'KIND':<10} {'ATT':>3} {'OUTCOMES':<30} {'SECS':>6} {'PROMPT KB':>9} {'IN TOK':>9} {'CACHED':>9} {'OUT TOK':>8} {'COST $':>7}  SETTINGS")
         for (agent, kind), r in rep.items():
             outcomes = ",".join(f"{k}:{v}" for k, v in sorted(r["outcomes"].items()))
             tokens = (f"{r['input']:>9} {r['cached']:>9} {r['output']:>8} {r['cost_usd']:>7.3f}" if r["with_usage"]
                       else f"{'-':>9} {'-':>9} {'-':>8} {'-':>7}")
-            print(f"{agent:<7} {kind:<10} {r['attempts']:>3} {outcomes:<30} {r['seconds']:>6.0f} {r['prompt_bytes'] / 1024:>9.1f} {tokens}")
+            print(f"{agent:<7} {kind:<10} {r['attempts']:>3} {outcomes:<30} {r['seconds']:>6.0f} {r['prompt_bytes'] / 1024:>9.1f} {tokens}  {','.join(r['settings'])}")
         if not rep:
             print("no finished attempts in this window")
     elif args.cmd == "gc":

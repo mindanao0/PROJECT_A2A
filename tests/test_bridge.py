@@ -328,6 +328,30 @@ class Runtime(BridgeTest):
         with self.assertRaisesRegex(ControlError, "Unknown project"):
             self.b.command({"action": "verify_integration", "project_id": "nope"})
 
+    def test_agent_options_are_listed_validated_saved_and_used_by_new_tasks(self):
+        ao = self.b.snapshot()["agent_options"]
+        self.assertEqual(sorted(ao), ["claude", "codex"])
+        self.assertEqual((ao["claude"]["model"], ao["claude"]["effort"]), ("", ""))
+        self.assertEqual(ao["claude"]["efforts"], ["low", "medium", "high", "xhigh", "max"])
+        self.assertIn("haiku", ao["claude"]["models"])
+        with self.assertRaisesRegex(ControlError, "effort for claude must be one of"):
+            self.b.command({"action": "set_agent_options", "agent": "claude", "effort": "ultra"})
+        with self.assertRaisesRegex(ControlError, "no model or effort setting"):
+            self.b.command({"action": "set_agent_options", "agent": "fake", "effort": "low"})
+        out = self.b.command({"action": "set_agent_options", "agent": "claude", "model": "haiku", "effort": "low"})
+        self.assertIn("effort low", out["message"])
+        ao = self.b.snapshot()["agent_options"]["claude"]
+        self.assertEqual((ao["model"], ao["effort"]), ("haiku", "low"))
+        self.assertEqual(runtime.load_config()["agents"]["claude_effort"], "low")  # persisted, not just in memory
+        tid = self.create(DONE, agent="claude", effort="high", model="")
+        row = self.store.one("select model, effort from tasks where id = ?", int(tid))
+        self.assertEqual((row["model"], row["effort"]), (None, "high"))
+        t = self.task(self.b.snapshot(), tid)
+        self.assertEqual((t["model"], t["effort"]), (None, "high"))
+        with self.assertRaisesRegex(ControlError, "effort for claude"):
+            self.create(DONE, agent="claude", effort="ultra")
+        self.cmd(tid, "stop")
+
 
 class Http(BridgeTest):
     def test_server_drives_the_real_runtime(self):

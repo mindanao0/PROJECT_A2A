@@ -97,7 +97,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from navis import runtime  # noqa: E402  (after the environment is set)
 
 s = runtime.open_store()
-tid, _ = runtime.add_task(s, "p", agent, spec, ["src"])
+tid, _ = runtime.add_task(s, "p", agent, spec, ["src"], model=os.environ.get("PROBE_MODEL") or None,
+                          effort=os.environ.get("PROBE_EFFORT") or None)  # e.g. PROBE_MODEL=haiku PROBE_EFFORT=low
 t0 = time.time()
 if stop:
     def ancestors():  # the shell that launched this probe has the pattern in its own command line
@@ -236,6 +237,8 @@ for e in s.q("select attempt, kind, data from events where task = ? order by id"
     print(" ", e["attempt"], e["kind"], e["data"][:240])
 log = work / "home/attempts" / f"{tid}-1" / "agent.log"
 if agent == "claude" and log.exists():  # §10 probe 2: the init event lists the tools the agent really has
+    used = {m for line in log.read_text().splitlines() if '"modelUsage"' in line for m in json.loads(line).get("modelUsage", {})}
+    print("models actually used:", ", ".join(sorted(used)) or "(not reported)")
     for line in log.read_text().splitlines():
         if '"subtype":"init"' in line:
             tools = json.loads(line)["tools"]
