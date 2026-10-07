@@ -125,11 +125,14 @@ class Snapshot(BridgeTest):
         by = {p["id"]: p for p in snap["providers"]}
         self.assertEqual((by["fake"]["status"], by["fake"]["slot_limit"]), ("Ready", 2))
         self.assertEqual((by["codex"]["status"], by["codex"]["reason"]), ("Unavailable", "Not logged in"))
-        self.assertEqual(snap["capabilities"]["handoff"], {"claude_review": False, "codex_continue": False})
+        self.assertEqual(snap["capabilities"]["handoff"], {"claude_review": False, "codex_continue": False,
+                                                           "codex_review": False, "claude_continue": False})
         self.assertFalse(snap["capabilities"]["controls"]["graceful_stop"])
         self.login("claude")
         snap = self.b.snapshot()
         self.assertTrue(snap["capabilities"]["handoff"]["claude_review"])
+        self.assertTrue(snap["capabilities"]["handoff"]["claude_continue"])
+        self.assertFalse(snap["capabilities"]["handoff"]["codex_review"])  # each agent is gated by its own login
         self.assertEqual({p["id"]: p["status"] for p in snap["providers"]}["claude"], "Ready")
 
     def test_duplicate_and_bad_input(self):
