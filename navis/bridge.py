@@ -29,13 +29,14 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
          "leak": "LEAK", "stale-result-dropped": "STALE", "integrate": "INTEGRATE", "integrate-error": "INTEGRATE",
-         "promote": "PROMOTE", "review": "REVIEW", "integration-discarded": "INTEGRATE"}
+         "promote": "PROMOTE", "review": "REVIEW", "integration-discarded": "INTEGRATE", "ask": "INPUT"}
 
 
 def message(kind, d):
     if kind == "status":
         return f"{d['status']}: {d.get('note') or ''}".rstrip(": ")
     return {"attempt": lambda: f"Attempt {d.get('n')} started on {d.get('agent')} from {str(d.get('base'))[:10]}",
+            "ask": lambda: f"Agent asked: {d.get('question')}" + (f" [options: {' | '.join(d['options'])}]" if d.get("options") else ""),
             "tool": lambda: f"Agent called {d.get('tool')}",
             "check": lambda: f"Check {d.get('name')}: exit {d.get('rc')}",
             "prepare": lambda: f"Prepare {d.get('name')}: exit {d.get('rc')}",
@@ -74,19 +75,24 @@ def memory_bytes(unit):
 
 
 class Bridge:
-    def __init__(self, store=None):
+    def __init__(self, store=None, runner=True):
+        # runner=False: GUI only; agents are started by a separate `navis-cli run` on the same store.
+        self.runner = runner
         self.rt = runtime.Runtime(store)
         self.store = self.rt.store
-        self.rt.start()
+        if runner:
+            self.rt.start()
         self.diffs = {}
         self.integrating = {}  # project -> task id, while its checks run in a background thread
         self.lock = threading.Lock()
 
     def close(self):
-        self.rt.shutdown()
+        if self.runner:
+            self.rt.shutdown()
 
     def tick(self):
-        self.rt.tick()
+        if self.runner:
+            self.rt.tick()
 
     # Reading
 
@@ -154,6 +160,15 @@ class Bridge:
             return None
         return self.rt.redact(data.decode(errors="replace"))
 
+    def readable(self, aid):
+        path = runtime.data_dir() / "attempts" / aid / "agent.log"
+        raw = self.read(aid, "agent.log", 400_000)
+        if raw is None:
+            return None
+        if path.stat().st_size > 400_000:  # the tail starts mid-line
+            raw = raw.split("\n", 1)[-1]
+        return runtime.readable_log(raw)[-MAX_LOG:]
+
     def exists(self, aid, name):
         return (runtime.data_dir() / "attempts" / aid / name).exists()
 
@@ -184,7 +199,12 @@ class Bridge:
                 name = f"{label} / attempt {aid}"
                 if full:
                     text = self.read(aid, file, limit)
-                    if text is not None:
+                    if text is not None and kind == "agent_log":  # the conversation first, the raw JSON below it
+                        pretty = self.readable(aid)
+                        if pretty:
+                            arts.append(self.artifact(aid, kind, f"Agent conversation / attempt {aid}", pretty))
+                        arts.append(self.artifact(aid, kind, f"{label} (raw) / attempt {aid}", text) | {"id": f"agent_log_raw{aid}"})
+                    elif text is not None:
                         arts.append(self.artifact(aid, kind, name, text))
                 elif self.exists(aid, file):
                     arts.append(self.artifact(aid, kind, name))
@@ -240,7 +260,8 @@ class Bridge:
         pending = None
         if state in ("WAITING_INPUT", "WAITING_APPROVAL"):  # REVIEW has no separate question; the UI shows the diff
             pending = {"id": f"{tid}:{aid}:{state}", "message": t["note"] or state, "attempt_id": aid,
-                       "expires": t["updated"] + 86400, "payload_hash": ""}
+                       "expires": t["updated"] + 86400, "payload_hash": "",
+                       "options": runtime.ask_options(self.store, tid) if state == "WAITING_INPUT" else []}
         return {
             "model": t["model"], "effort": t["effort"], "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
@@ -330,6 +351,49 @@ class Bridge:
 
     # Commands
 
+    def chat(self, p):
+        action = p["action"]
+        if action == "chat_start":
+            if p.get("project_id") not in {x["id"] for x in self.projects()}:
+                raise ControlError("Unknown project")
+            if p.get("agent") not in ("claude", "codex"):
+                raise ControlError("Chat supports claude and codex")
+            label = p.get("label") or ""
+            if not isinstance(label, str) or (label and not re.fullmatch(r"[A-Za-z0-9]{1,20}", label)):
+                raise ControlError("Chat name: 1-20 letters or digits")
+            try:
+                return {"session": runtime.chat_start(p["project_id"], p["agent"], label)}
+            except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
+                raise ControlError(f"Could not start the chat: {e}")
+        sessions = runtime.chat_sessions()
+        if action == "chat_list":
+            return {"sessions": sessions}
+        if p.get("session") not in sessions:
+            raise ControlError("Unknown chat session")
+        if action == "chat_close":
+            runtime.chat_close(p["session"])
+            return {"ok": True}
+        if action == "chat_screen":
+            return {"screen": self.rt.redact(runtime.chat_screen(p["session"]))}
+        if action == "chat_send":
+            text = p.get("text")
+            if text is not None and (not isinstance(text, str) or len(text) > 2000 or "\0" in text):
+                raise ControlError("Text must be at most 2000 characters")
+            try:
+                runtime.chat_send(p["session"], text, p.get("key"), bool(p.get("enter")), bool(p.get("paste")))
+            except (ValueError, subprocess.CalledProcessError) as e:
+                raise ControlError(f"Could not send: {e}")
+            return {"ok": True}
+        raise ControlError("Unknown chat action")
+
+    def chat_upload(self, session, ctype, data):
+        if session not in runtime.chat_sessions():
+            raise ControlError("Unknown chat session")
+        try:
+            return {"path": runtime.chat_upload(session, ctype, data)}
+        except (ValueError, OSError, subprocess.CalledProcessError) as e:
+            raise ControlError(str(e))
+
     def command(self, p):
         if not isinstance(p, dict) or not isinstance(p.get("action"), str):
             raise ControlError("Command must be an object with a text action")
@@ -337,6 +401,8 @@ class Bridge:
         if action in ("pause", "resume"):
             runtime.set_paused(s, action == "pause")
             return {"ok": True}
+        if action.startswith("chat_"):
+            return self.chat(p)
         if action == "create_project":
             return self.create_project(p)
         if action == "update_settings":

@@ -95,13 +95,16 @@ class Handler(BaseHTTPRequestHandler):
             except ControlError as exc:
                 self.reply(404, {"error": str(exc)})
             return
-        files = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+        files = {
+            "/": "index.html", "/app.js": "app.js", "/style.css": "style.css",
+            "/navis-wordmark.png": "navis-wordmark.png", "/navis-icon.svg": "navis-icon.svg",
+        }
         if path not in files:
             self.reply(404, {"error": "Not found"})
             return
         file = WEB / files[path]
         kind = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-        self.reply(200, file.read_bytes(), kind + "; charset=utf-8")
+        self.reply(200, file.read_bytes(), kind + ("; charset=utf-8" if kind.startswith("text/") or kind == "application/javascript" else ""))
 
     def do_POST(self):
         if not self.boundary(api=True, mutation=True):
@@ -112,6 +115,30 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(401, {"error": "Open the launch link to establish a session"})
                 return
             self.reply(200, {"ok": True}, extra_headers={"Set-Cookie": f"{self.server.session_cookie}={self.server.session_token}; HttpOnly; SameSite=Strict; Path=/api/"})
+            return
+        if urlsplit(self.path).path == "/api/chat/upload":
+            upload = getattr(self.server.runtime, "chat_upload", None)  # the simulation has no chats
+            if upload is None:
+                self.reply(404, {"error": "Not found"})
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 8_000_000:
+                    raise ValueError
+            except ValueError:
+                self.reply(413, {"error": "Invalid or oversized image (limit 8 MB)"})
+                return
+            self.connection.settimeout(30)
+            try:
+                session = parse_qs(urlsplit(self.path).query).get("session", [""])[0]
+                result = upload(session, self.headers.get("Content-Type", "").split(";")[0], self.rfile.read(size))
+            except (ValueError, ControlError) as exc:
+                self.reply(400, {"error": str(exc)})
+                return
+            except TimeoutError:
+                self.reply(408, {"error": "Request timed out"})
+                return
+            self.reply(200, result)
             return
         if self.path != "/api/command":
             self.reply(404, {"error": "Not found"})

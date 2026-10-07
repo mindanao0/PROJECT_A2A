@@ -6,6 +6,8 @@ import itertools
 import json
 import os
 import re
+import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -286,6 +288,171 @@ def answer(store, tid, text):
     return store.move(tid, "QUEUED", ("WAITING_INPUT",), note="answered", context_add=f"A: {text}\n")
 
 
+# Chat: an interactive claude/codex in the sandbox, kept alive in tmux. No task, no MCP tools.
+
+# Any tmux key name: optional C-/M-/S- modifiers plus a character or a named key (Enter, Tab, BTab, F1..F12, PPage...).
+KEY_RE = re.compile(r"(?:[CMS]-){0,3}(?:[A-Za-z0-9]|Enter|Escape|Tab|BTab|Space|BSpace|DC|IC|Up|Down|Left|Right|Home|End|PPage|NPage|F(?:[1-9]|1[0-2]))")
+
+
+def chat_sessions():
+    r = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"], capture_output=True, text=True)
+    return [n for n in r.stdout.split() if n.startswith("navis-chat-")]
+
+
+def chat_name(project, agent, label=""):
+    return f"navis-chat-{project}-{agent}{'-' + label if label else ''}".replace(".", "_")  # tmux rewrites . and :
+
+
+def chat_start(project, agent, label=""):
+    """Start (or find) a chat session; returns the tmux session name. Each label has its own clone,
+    so several chats on one project and agent do not edit the same files."""
+    name = chat_name(project, agent, label)
+    if name in chat_sessions():
+        return name
+    proj, lim = load_project(project), load_config()["limits"]
+    tag = f"{agent}{'-' + label if label else ''}"
+    repo = data_dir() / "chats" / f"{project}-{tag}" / "repo"
+    if not repo.exists():
+        sandbox.clone(proj["path"], repo, "HEAD", f"navis/chat/{tag}")
+        sandbox.overlay(proj["path"], repo)  # your uncommitted work and untracked CLAUDE.md/.claude come along
+    home = data_dir() / "agents" / agent
+    home.mkdir(parents=True, exist_ok=True)
+    exe = _which(agent)
+    if agent == "claude":
+        argv, env, extra = [str(exe)], {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
+    else:
+        argv, env, extra = [str(exe), "--sandbox", "workspace-write"], {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
+    box = sandbox.bwrap(repo, rw=[repo, home], ro=[*proj["objects"], *proj["ro"], *extra], env={"TERM": "screen-256color", **env})
+    cmd = shlex.join(sandbox.scope(name, lim["agent_memory"], box + argv))
+    subprocess.run(["tmux", "new-session", "-d", "-x", "120", "-y", "40", "-s", name, "-c", str(repo), cmd], check=True)
+    subprocess.run(["tmux", "set-option", "-t", name, "@navis_repo", str(repo)], check=True)  # where uploads go
+    return name
+
+
+def chat_close(name):
+    subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+    sandbox.stop_unit(name)  # the agent's cgroup scope carries the session's name
+
+
+def chat_screen(name):
+    """The visible screen plus up to 1000 lines of scrollback (the GUI shows it as a scrollable history)."""
+    return subprocess.run(["tmux", "capture-pane", "-p", "-J", "-S", "-1000", "-t", name], capture_output=True, text=True).stdout
+
+
+IMAGES = {"image/png": (".png", b"\x89PNG"), "image/jpeg": (".jpg", b"\xff\xd8"), "image/gif": (".gif", b"GIF8"),
+          "image/webp": (".webp", b"RIFF")}
+
+
+def chat_upload(name, ctype, data):
+    """Save an image in the chat's clone and paste its path into the agent's input (not sent), as a terminal
+    paste of a file path does. The file name is generated, never taken from the client."""
+    ext, magic = IMAGES.get(ctype, (None, None))
+    if not ext or not data.startswith(magic):
+        raise ValueError("Send a PNG, JPEG, GIF or WebP image")
+    repo = subprocess.run(["tmux", "show-option", "-v", "-t", name, "@navis_repo"], capture_output=True, text=True).stdout.strip()
+    if not repo or not Path(repo).resolve().is_relative_to((data_dir() / "chats").resolve()):
+        raise ValueError("This chat has no project clone")
+    folder = Path(repo, ".navis-uploads")
+    folder.mkdir(exist_ok=True)
+    exclude = Path(repo, ".git", "info", "exclude")
+    if exclude.exists() and ".navis-uploads/" not in exclude.read_text():
+        exclude.write_text(exclude.read_text().rstrip("\n") + "\n.navis-uploads/\n")
+    path = folder / f"{int(time.time())}-{secrets.token_hex(3)}{ext}"
+    path.write_bytes(data)
+    subprocess.run(["tmux", "set-buffer", "-b", "navis-image", "--", f"{path} "], check=True)
+    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", "navis-image", "-t", name], check=True)
+    return str(path)
+
+
+def chat_send(name, text=None, key=None, enter=False, paste=False):
+    """Type text (literally, or as a bracketed paste) and/or press one key; callers pass only names from chat_sessions()."""
+    if key is not None and not KEY_RE.fullmatch(key):
+        raise ValueError("unknown key")
+    keys = ([key] if key else []) + (["Enter"] if enter else [])
+    if text and paste:
+        subprocess.run(["tmux", "set-buffer", "-b", "navis-paste", "--", text], check=True)
+        subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", "navis-paste", "-t", name], check=True)
+    elif text:
+        subprocess.run(["tmux", "send-keys", "-t", name, "-l", "--", text], check=True)
+    if text and keys:
+        time.sleep(0.3)  # a TUI drops a key that arrives right after its input
+    for k in keys:
+        subprocess.run(["tmux", "send-keys", "-t", name, k], check=True)
+
+
+def ask_options(store, tid):
+    """The choices the agent offered with its pending question (empty when it asked in free text)."""
+    e = store.one("select data from events where task = ? and kind = 'ask' order by id desc limit 1", tid)
+    return json.loads(e["data"]).get("options", []) if e else []
+
+
+def _clip(text, n):
+    text = str(text).strip()
+    return text if len(text) <= n else text[:n] + f" … (+{len(text) - n} chars)"
+
+
+def format_log_line(line):
+    """One line of an agent's JSON output (claude stream-json or codex --json) as readable text, or None for
+    protocol noise. A line that is not JSON is shown as it is."""
+    line = line.rstrip("\n")
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return line or None
+    if not isinstance(d, dict):
+        return line
+    kind = d.get("type")
+    if kind == "assistant":  # claude
+        out = []
+        for b in (d.get("message") or {}).get("content") or []:
+            if b.get("type") == "text" and b.get("text", "").strip():
+                out.append(b["text"].strip())
+            elif b.get("type") == "tool_use":
+                args = ", ".join(f"{k}={_clip(json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v, 120)}"
+                                 for k, v in (b.get("input") or {}).items())
+                out.append(f"→ {b.get('name')}({args})")
+        return "\n".join(out) or None
+    if kind == "user":  # claude: tool results
+        out = []
+        for b in (d.get("message") or {}).get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else c
+                out.append("  ← " + _clip(c or "(no output)", 400).replace("\n", "\n    "))
+        return "\n".join(out) or None
+    if kind == "result":  # claude
+        bits = [f"{k} {d[k]}" for k in ("num_turns", "duration_ms") if k in d]
+        if d.get("total_cost_usd") is not None:
+            bits.append(f"cost ${d['total_cost_usd']:.2f}")
+        return ("✗ " if d.get("is_error") else "■ finished") + (f" ({', '.join(bits)})" if bits else "")
+    if kind in ("item.completed", "item.started") and isinstance(d.get("item"), dict):  # codex
+        it = d["item"]
+        t = it.get("type")
+        if t == "agent_message" and kind == "item.completed":
+            return str(it.get("text", "")).strip() or None
+        if t == "command_execution":
+            if kind == "item.started":
+                return f"→ $ {it.get('command')}"
+            return f"  ← exit {it.get('exit_code')}" + (("\n    " + _clip(it["aggregated_output"], 400).replace("\n", "\n    ")) if it.get("aggregated_output") else "")
+        if t == "file_change" and kind == "item.completed":
+            return "→ changed " + ", ".join(c.get("path", "?") for c in it.get("changes", []))
+        if t == "mcp_tool_call" and kind == "item.started":
+            return f"→ {it.get('server')}.{it.get('tool')}({_clip(json.dumps(it.get('arguments'), ensure_ascii=False), 120)})"
+        if t == "error":
+            return f"✗ {it.get('message')}"
+        return None
+    if kind == "turn.completed":  # codex
+        u = d.get("usage") or {}
+        return f"■ finished ({u.get('input_tokens', 0)} in, {u.get('output_tokens', 0)} out tokens)"
+    if kind in ("error", "turn.failed"):
+        return "✗ " + _clip(json.dumps(d.get("error") or d.get("message") or d, ensure_ascii=False), 300)
+    return None  # system/hook/init, rate limits, thread.started, turn.started ...
+
+
+def readable_log(text):
+    return "\n".join(x for x in map(format_log_line, text.splitlines()) if x)
+
+
 def approve(store, tid):
     return (store.move(tid, "QUEUED", ("WAITING_APPROVAL",), approved=1, note="approved")
             or store.move(tid, "COMPLETED", ("REVIEW",), note="approved by user"))
@@ -479,7 +646,7 @@ class Runtime:
 
         home = data_dir() / "agents" / t["agent"]
         home.mkdir(parents=True, exist_ok=True)
-        state = {"report": None, "asked": None}
+        state = {"report": None, "asked": None, "options": []}
         sock = io / "navis.sock"
         srv = self._serve(t, aid, proj, repo, ro, sock, state)
         mcp = [sandbox.PY, str(sandbox.PKG / "mcp.py"), str(sock)]
@@ -591,6 +758,7 @@ class Runtime:
         elif outcome == "failed":
             s.move(tid, "FAILED", R, head=head, note=summary)
         elif outcome == "asked":
+            s.log(tid, aid, "ask", question=state["asked"], options=state["options"])
             s.move(tid, "WAITING_INPUT", R, head=head, note=state["asked"],
                    context_add=f"Q: {state['asked']}\n")
         elif outcome == "unreported":
@@ -702,6 +870,8 @@ class Runtime:
             return True, "recorded; end your turn now"
         if tool == "ask_user":
             state["asked"] = self.redact(str(args.get("question", "")))
+            opts = args.get("options")
+            state["options"] = [self.redact(str(o).strip())[:120] for o in opts if str(o).strip()][:6] if isinstance(opts, list) else []
             return True, "sent to the user; end your turn now"
         if tool == "delegate":
             return self._delegate(t, args)
@@ -774,7 +944,7 @@ class Runtime:
                  f"Checks you can run with the run_check tool: {', '.join(proj['checks']) or 'none'}."
                  + (f" Your result is verified by: {', '.join(json.loads(t['checks']))}; the others belong to parallel work." if t["checks"] else ""),
                  'When finished, call report_result with status "done" or "failed" and a short summary.',
-                 "If you need a decision from the user, call ask_user and then stop."]
+                 "If you need a decision from the user, call ask_user (pass options when the choices are known) and then stop."]
         if t["parent"] is None:
             lines.append("To hand follow-up work to a later task (it starts after you finish, from your result), call "
                          "delegate(title, spec, scope); scope must stay inside yours.")

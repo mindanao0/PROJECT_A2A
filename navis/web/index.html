@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#090909">
+  <meta name="theme-color" content="#050505">
   <title>Navis — Control room</title>
+  <link rel="icon" href="/navis-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
@@ -13,26 +14,20 @@
 <div class="shell">
   <aside class="sidebar">
     <div class="brand" aria-label="Navis">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 48 48" focusable="false">
-          <path class="signal-fragment signal-red" d="M5 11h19l5-5h14v5H31l-5 5H5z" />
-          <path class="signal-fragment signal-white" d="M5 21h11l4-4h23v5H22l-4 4H5z" />
-          <path class="signal-fragment signal-red" d="M5 32h20l5 5h13v5H28l-5-5H5z" />
-          <path class="signal-fragment signal-white" d="M34 27h9v4h-9z" />
-        </svg>
-      </span>
-      <span class="brand-copy"><span class="brand-name" data-wordmark="NAVIS">NAVIS</span><span class="brand-subtitle">CONTROL SYSTEM</span></span>
+      <img class="brand-logo" src="/navis-wordmark.png" alt="NAVIS" width="1807" height="308">
+      <span class="brand-subtitle"><span aria-hidden="true">//</span> CYBERNETICS CONTROL</span>
     </div>
-    <div class="workspace-tag"><span class="avatar" aria-hidden="true">D</span><div>Personal workspace<small>Cybernetics / Control</small></div><span class="signal" aria-hidden="true"></span></div>
+    <div class="workspace-tag"><span class="avatar" aria-hidden="true">D</span><div>Operator workspace<small>LOCAL / SINGLE USER</small></div><span class="signal" aria-hidden="true"></span></div>
     <div class="nav-label">WORKSPACE</div>
     <nav aria-label="Main navigation">
-      <button class="nav-item active" data-view="overview"><span aria-hidden="true">◈</span>Overview</button>
-      <button class="nav-item" data-view="tasks"><span aria-hidden="true">▦</span>Task board<span id="nav-task-count" class="nav-count">0</span></button>
-      <button class="nav-item" data-view="agents"><span aria-hidden="true">◎</span>Agents</button>
-      <button class="nav-item" data-view="activity"><span aria-hidden="true">≋</span>Activity log</button>
-      <button class="nav-item" data-view="artifacts"><span aria-hidden="true">◇</span>Artifacts</button>
-      <button class="nav-item" data-view="resources"><span aria-hidden="true">▥</span>Resources</button>
-      <button class="nav-item" data-view="settings"><span aria-hidden="true">⚙</span>Settings</button>
+      <button class="nav-item active" data-view="overview"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg></span>Overview</button>
+      <button class="nav-item" data-view="tasks"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M9 4v16M15 4v16M3 9h18"/></svg></span>Task board<span id="nav-task-count" class="nav-count">0</span></button>
+      <button class="nav-item" data-view="agents"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M8 3h8l5 9-5 9H8l-5-9z"/><circle cx="12" cy="12" r="3"/></svg></span>Agents</button>
+      <button class="nav-item" data-view="activity"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M3 5h18M3 12h4l3-5 4 10 3-5h4M3 19h18"/></svg></span>Activity log</button>
+      <button class="nav-item" data-view="artifacts"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="m12 3 9 5v8l-9 5-9-5V8zM3 8l9 5 9-5M12 13v8"/></svg></span>Artifacts</button>
+      <button class="nav-item" data-view="resources"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 20V10h4v10M10 20V4h4v16M16 20V7h4v13"/></svg></span>Resources</button>
+      <button class="nav-item" data-view="chat" id="nav-chat" hidden><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 5h16v11H9l-5 4z"/></svg></span>Agent chat</button>
+      <button class="nav-item" data-view="settings"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/><path d="M8 3v6M16 9v6M10 15v6"/></svg></span>Settings</button>
     </nav>
     <div class="nav-label project-label">PROJECTS <button id="add-project" class="icon-button" aria-label="Add project">+</button></div>
     <div id="project-list"></div>
@@ -42,16 +37,37 @@
     </div>
   </aside>
   <main>
-    <header class="topbar"><div><span class="muted">Workspace</span><span class="breadcrumb" aria-hidden="true">/</span><span id="view-label">Overview</span></div><div class="topbar-right"><span class="local-chip"><i class="signal" aria-hidden="true"></i> LOCAL ONLY</span><button id="notifications" class="icon-button" aria-label="Enable browser notifications" title="Enable browser notifications">◷</button><button id="refresh" class="icon-button" aria-label="Refresh">↻</button></div></header>
+    <header class="topbar"><div><span class="muted">Workspace</span><span class="breadcrumb" aria-hidden="true">/</span><span id="view-label">Overview</span></div><div class="topbar-right"><button id="open-command" class="command-trigger" aria-label="Open command palette" aria-haspopup="dialog" aria-controls="command-dialog" aria-keyshortcuts="Control+k Meta+k"><span aria-hidden="true">⌘</span><span class="command-trigger-label">Command</span><kbd>Ctrl K</kbd></button><span class="local-chip"><i class="signal" aria-hidden="true"></i> LOCAL ONLY</span><button id="notifications" class="icon-button" aria-label="Enable browser notifications" title="Enable browser notifications">◷</button><button id="refresh" class="icon-button" aria-label="Refresh">↻</button></div></header>
     <div class="page">
-      <div class="page-heading"><div><div class="eyebrow">NAVIS / CYBERNETICS CONTROL</div><h1 id="page-title">Control room</h1><p id="page-subtitle">A clear view of the work. You stay at the helm.</p></div><div class="heading-actions"><button id="pause" class="button secondary" disabled>Ⅱ Pause dispatch</button><button id="new-task" class="button primary" disabled>+ New task</button></div></div>
+      <section id="command-masthead" class="command-masthead" aria-label="Navis command center">
+        <svg class="circuit-traces" viewBox="0 0 680 260" fill="none" aria-hidden="true" focusable="false"><path d="M0 45h220l50 50h150l50-50h210M0 210h170l65-65h180l55 55h210M330 0v35l60 60v75l70 70h220M500 0v55l-45 45v55l55 55v50M590 0v80l-35 35v100l45 45"/><circle cx="220" cy="45" r="4"/><circle cx="170" cy="210" r="4"/><circle cx="420" cy="95" r="4"/></svg>
+        <div class="masthead-wordmark">
+          <div class="masthead-kicker"><span class="signal" aria-hidden="true"></span> PERSONAL AGENT ORCHESTRATION <span class="masthead-index">N / 01</span></div>
+          <img src="/navis-wordmark.png" alt="NAVIS" width="1807" height="308" fetchpriority="high">
+          <div class="masthead-tagline">ONE OPERATOR<span aria-hidden="true">/</span>FULL CONTROL</div>
+        </div>
+        <div class="masthead-system">
+          <div class="reactor" aria-hidden="true"><svg viewBox="0 0 160 160" focusable="false"><circle class="reactor-track" cx="80" cy="80" r="66"/><circle class="reactor-orbit" cx="80" cy="80" r="66"/><circle class="reactor-inner" cx="80" cy="80" r="51"/><path class="reactor-crosshair" d="M80 3v20M80 137v20M3 80h20M137 80h20M47 47h15M47 47v15M113 47H98M113 47v15M47 113h15M47 113V98M113 113H98M113 113V98"/><path class="reactor-core" d="m65 58 30 22-30 22z"/></svg></div>
+          <div class="system-readout"><span>RUNTIME LINK</span><strong id="system-state">CONNECTING</strong><span id="system-mode">AWAITING RUNTIME</span></div>
+        </div>
+        <div class="masthead-foot"><span><span aria-hidden="true">⌁</span> LOCAL COMMAND CENTER</span><span id="dispatch-state">CHECKING DISPATCH</span><span class="masthead-version">NAVIS / V0.2</span></div>
+      </section>
+      <div class="page-heading"><div><div class="eyebrow">NAVIS / CYBERNETICS CONTROL</div><h1 id="page-title" tabindex="-1">Control room</h1><p id="page-subtitle">Your directives. Your agents. Your control.</p></div><div class="heading-actions"><button id="pause" class="button secondary" disabled>Ⅱ Pause dispatch</button><button id="new-task" class="button primary" disabled>+ New task</button></div></div>
       <div id="runtime-banner" class="notice" aria-live="polite"><span class="notice-icon" aria-hidden="true">◌</span><div><strong>Connecting to runtime</strong><span>Checking current mode and capabilities.</span></div><span class="notice-badge">NAVIS</span></div>
       <div id="connection-alert" class="connection-alert" hidden role="alert"></div>
       <section id="content" aria-label="Workspace content"></section>
-      <footer><span>Navis / Local-first orchestration</span><span><i class="dot" aria-hidden="true"></i>Remote access disabled</span></footer>
+      <footer><span><b>NAVIS</b> / PERSONAL COMMAND SYSTEM</span><span class="live-status"><time id="local-clock">LOCAL / —</time><span id="sync-state">SYNC / WAITING</span></span><span><i class="dot" aria-hidden="true"></i>Remote access disabled</span></footer>
     </div>
   </main>
 </div>
+<dialog id="command-dialog" aria-labelledby="command-title">
+  <div class="dialog-heading"><div><span class="eyebrow">OPERATOR ACCESS / QUICK CONTROL</span><h2 id="command-title">Command center</h2></div><button class="icon-button" data-close="command-dialog" aria-label="Close command palette">×</button></div>
+  <label class="sr-only" for="command-search">Search commands, tasks and projects</label>
+  <div class="command-search-wrap"><span aria-hidden="true">⌕</span><input id="command-search" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="command-results" autocomplete="off" spellcheck="false" placeholder="Search commands, tasks, projects…" autofocus></div>
+  <div id="command-results" role="listbox" aria-label="Matching commands"></div>
+  <div id="command-status" class="sr-only" role="status"></div>
+  <div class="command-help"><span><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> run</span><span><kbd>Esc</kbd> close</span></div>
+</dialog>
 <dialog id="task-dialog" aria-labelledby="create-title" aria-describedby="create-description">
   <form id="task-form"><div class="dialog-heading"><div><span class="eyebrow">NEW DIRECTIVE</span><h2 id="create-title">Create a task</h2></div><button type="button" class="icon-button" data-close="task-dialog" aria-label="Close">×</button></div>
     <p class="muted" id="create-description">This task runs against a simulated agent. It cannot access your repository.</p>
