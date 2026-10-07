@@ -145,6 +145,8 @@ Debate mode จบอย่างไร:
 
 ไม่ควรใช้ majority vote อย่างเดียว
 
+**หลักฐานจาก Phase 5 ([PHASE5.md](PHASE5.md)):** ลองวัด proposal → critique → implement กับ direct บนงานที่ spec มีกฎละเอียด: ผลต่างเห็นเฉพาะ semver (direct ล้ม 2/2, debate ผ่าน 1 และอีกรอบค้าง) ในราคา ~3× เวลา/token และ 2 จาก 6 รอบค้างรออนุมัติ ข้อเสนอ: ยังไม่ต้องเลือกกลไก consensus เพราะยังไม่สร้าง Debate — ยังไม่ใช่คำตัดสินของผู้ใช้
+
 ## OD-018 First supported platforms — RESOLVED
 
 D-002: Linux first ยืนยันแล้ว ระบบอื่นเป็นงานภายหลังและยังไม่อยู่ในเกณฑ์ผ่าน MVP
