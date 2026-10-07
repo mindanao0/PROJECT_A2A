@@ -15,7 +15,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   fs.writeFileSync(path.join(proj, 'src/a.py'), 'a = 1\n');
   git('init', '-q', '-b', 'main'); git('add', '-A'); git('commit', '-qm', 'init');
   fs.writeFileSync(path.join(root, 'cfg/projects/demo.toml'), `path = "${proj}"\nprotected = []\n[checks]\nok = "true"\n`);
-  const server = spawn(process.env.PYTHON || 'python3', ['-m', 'navis', '--real', '--no-browser', '--state-dir', state],
+  const server = spawn(process.env.PYTHON || 'python3', ['-m', 'navis', '--port', '0', '--no-browser', '--state-dir', state],
     {stdio: 'ignore', env: {...process.env, NAVIS_HOME: path.join(root, 'home'), NAVIS_CONFIG: path.join(root, 'cfg')}});
   let browser;
   try {
