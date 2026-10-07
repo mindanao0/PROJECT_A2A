@@ -61,7 +61,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.locator('#agent-options-form [name="claude_model"]').fill('haiku');
     await page.locator('#agent-options-form [name="claude_effort"]').selectOption('low');
     await page.getByRole('button', {name: 'Save model and effort', exact: true}).click();
-    await page.getByText('Model and effort saved').waitFor();
+    await page.locator('#toast', {hasText: 'Model and effort saved'}).waitFor();
     const saved = fs.readFileSync(path.join(root, 'cfg', 'config.toml'), 'utf8');
     assert(/claude_model = "haiku"/.test(saved) && /claude_effort = "low"/.test(saved), 'config.toml must hold the setting: ' + saved);
     await page.reload();
