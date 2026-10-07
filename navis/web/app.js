@@ -123,7 +123,7 @@ function integrationStrip() {
     const checks=i.checks.map(c=>`${escapeHTML(c.name)} ${c.rc?'✗':'✓'}`).join(', ')||'no checks configured';
     const detail=i.busy?`${i.busy==='verify'?'running every check on the merged commit…':`checking the merged commit for task ${escapeHTML(i.busy)}…`}`:`${i.tasks.length} task${i.tasks.length===1?'':'s'} merged at ${escapeHTML((i.commit||'').slice(0,10))} / checks on this exact commit: ${checks}`;
     const why=!i.busy&&!i.can_promote&&i.reason?`<br><small class="muted">${escapeHTML(i.reason)}</small>`:'';
-    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.verify_needed&&!i.busy?`<button class="button secondary" data-verify-integration="${escapeHTML(i.project_id)}">Run all checks</button>`:''}${i.review_needed&&!i.busy?`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" ${snapshot.capabilities?.handoff?.claude_review===true?'':'disabled title="Claude is not logged in."'}>Review with Claude</button>`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
+    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.verify_needed&&!i.busy?`<button class="button secondary" data-verify-integration="${escapeHTML(i.project_id)}">Run all checks</button>`:''}${i.review_needed&&!i.busy?`${['claude','codex'].map(a=>`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" data-agent="${a}" ${snapshot.capabilities?.handoff?.[a+'_review']===true?'':`disabled title="${a} is not logged in."`}>Review with ${a==='claude'?'Claude':'Codex'}</button>`).join('')}`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
   }).join('');
 }
 function agentRow(name, desc, mark, status, className='', sub='') {
@@ -167,6 +167,11 @@ function formatBytes(bytes) {
   const units=['B','KiB','MiB','GiB']; let value=Number(bytes), index=0;
   while(value>=1024&&index<units.length-1){value/=1024;index++;}
   return `${value.toFixed(index?1:0)} ${units[index]}`;
+}
+function usagePanel() {
+  const rows=snapshot.usage||[]; if (simulation()) return '';
+  const k=n=>n>=10000?`${(n/1000).toFixed(1)}k`:String(n);
+  return `<section class="panel"><div class="panel-header"><h2>Usage, last 24 hours</h2><span class="muted">What each CLI exposed; blank means it exposed nothing</span></div>${rows.length?`<table class="usage-table"><thead><tr><th>Agent</th><th>Kind</th><th>Attempts</th><th>Time</th><th>Navis prompt</th><th>Input tokens</th><th>Output</th><th>Cost</th><th>Settings</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escapeHTML(r.agent)}</td><td>${escapeHTML(r.kind)}</td><td>${r.attempts} (${escapeHTML(Object.entries(r.outcomes).map(([o,n])=>`${o}:${n}`).join(' '))})</td><td>${Math.round(r.seconds)} s</td><td>${(r.prompt_bytes/1024).toFixed(1)} KB</td><td>${r.with_usage?`${k(r.input)} (${k(r.cached)} cached)`:'-'}</td><td>${r.with_usage?k(r.output):'-'}</td><td>${r.with_usage&&r.cost_usd?`$${r.cost_usd.toFixed(3)}`:'-'}</td><td>${escapeHTML(r.settings.join(', '))}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No finished attempts in the last 24 hours.</p>'}</section>`;
 }
 function resourcePanel() {
   const slots = snapshot.resources?.slots || [];
@@ -224,13 +229,22 @@ function render() {
     html = `<div class="agent-grid"><section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>${[['Codex','✳','Provider CLI/session'],['Claude Code','✽','Provider CLI/session'],['Local LLM','⌘','Text summaries and log analysis']].map((entry,i)=>{const key=['codex','claude','local'][i], provider=providers.find(p=>p.id===key||p.name?.toLowerCase().replace(/ code/,'').replace(/ llm/,'')===entry[0].toLowerCase());return providerCard(entry,provider);}).join('')}</div>`;
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
   else if (view==='artifacts') html = artifacts(tasks);
-  else if (view==='resources') html = resourcePanel();
+  else if (view==='resources') html = resourcePanel()+usagePanel();
   else html = settingsPanel();
   $('#content').innerHTML = html; restoreFocus(focus); updateAttention(null,snapshot); updateCountdowns();
 }
 function populateSources(selected='') {
   const projectID = $('#task-project').value;
   $('#task-source').innerHTML = '<option value="">New task / no source</option>'+snapshot.tasks.filter(t=>t.project_id===projectID&&t.state==='COMPLETED').map(t=>`<option value="${escapeHTML(t.id)}" data-attempt="${escapeHTML(t.attempt_id)}" ${t.id===selected?'selected':''}>${escapeHTML(t.title)} / ${escapeHTML(shortID(t.attempt_id))}</option>`).join('');
+}
+function syncFlowRow() {
+  const row=$('#task-flow-row'), help=$('#task-flow-help'), pid=$('#task-project').value;
+  const proj=snapshot.projects.find(x=>x.id===pid), real=!simulation();
+  row.hidden=help.hidden=!real;
+  if (!real) return;
+  $('#task-after').innerHTML='<option value="">No dependency</option>'+snapshot.tasks.filter(t=>t.project_id===pid&&t.kind!=='review'&&!['FAILED','CANCELLED'].includes(t.state)).map(t=>`<option value="${escapeHTML(t.id)}">${escapeHTML(t.title)} (${escapeHTML(t.state)})</option>`).join('');
+  const names=proj?.checks||[];
+  $('#task-checks-list').innerHTML=names.length?names.map(n=>`<label class="inline-check"><input type="checkbox" name="checks" value="${escapeHTML(n)}"> ${escapeHTML(n)}</label>`).join(' '):'<span class="muted">This project has no checks.</span>';
 }
 function syncModelRow() {
   const row=$('#task-model-row'), agent=$('#task-agent').value, o=(snapshot.agent_options||{})[agent];
@@ -251,6 +265,7 @@ function openTaskForm(source=null) {
   $('#source-description').textContent = isReal ? 'The new task starts from the result commit of that task (its refs/navis/attempts/* ref).' : 'Source artifacts are copied as a simulation context reference; no Git branch is created.';
   $('#task-project').innerHTML = snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${(source?.project_id||project)===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('');
   populateSources(source?.id||'');
+  syncFlowRow();
   if (source) {$('#task-title').value = `Continue: ${source.title}`.slice(0,120);$('#task-spec').value = `Continue the work from “${source.title}”.\n\nDescribe the next outcome and acceptance criteria.`;$('#task-scope').value = source.scope.join(', ');}
   $('#task-dialog').showModal();
 }
@@ -269,7 +284,7 @@ function detailPanel(task) {
     const prompts = task.artifacts.filter(a=>a.kind==='prompt');
     return prompts.length ? prompts.map(a=>artifactBlock(a,task,true)).join('') : `${empty('No provider prompt was sent','These are the task instructions saved in Navis. They are not a prompt delivered to a model.')}<pre>${escapeHTML(task.spec)}</pre>${task.instructions.map(i=>`<pre>Instruction v${i.version}\n${escapeHTML(i.text)}</pre>`).join('')}`;
   }
-  if (detailTab==='attempts') return task.attempts.map(a=>`<div class="detail-section"><small>${escapeHTML(a.id)} / ${date(a.started_at)} / ${escapeHTML(a.backend)}</small>${badge(a.state||'RUNNING')}</div>`).join('') || empty('Waiting for dispatch','No attempt has started yet.');
+  if (detailTab==='attempts') return task.attempts.map(a=>`<div class="detail-section"><small>${escapeHTML(a.id)} / ${date(a.started_at)} / ${escapeHTML(a.backend)}${a.model||a.effort?` / ${escapeHTML(a.model||'default')} · ${escapeHTML(a.effort||'default')}`:''}${a.usage?` / ${a.usage.input} in (${a.usage.cached} cached) · ${a.usage.output} out${a.usage.cost_usd?` · $${a.usage.cost_usd.toFixed(3)}`:''}`:''}</small>${badge(a.state||'RUNNING')}</div>`).join('') || empty('Waiting for dispatch','No attempt has started yet.');
   return task.artifacts.filter(a=>!['diff','agent_log','prompt'].includes(a.kind)).map(a=>artifactBlock(a,task,true)).join('') || empty('No results yet','Result and verification evidence will appear here after a simulated step.','◇');
 }
 function updateDetail(force=false) {
@@ -294,6 +309,8 @@ function updateDetail(force=false) {
     const handoff=snapshot.capabilities?.handoff||{};
     controls.push(`<button class="button secondary" data-action="review_with_claude" ${handoff.claude_review===true?'':'disabled title="Claude review is unavailable until the runtime reports a logged-in adapter."'}>Review with Claude</button>`);
     controls.push(`<button class="button secondary" data-action="continue_with_codex" ${handoff.codex_continue===true?'':'disabled title="Codex continuation is unavailable until the runtime reports a logged-in adapter."'}>Continue with Codex</button>`);
+    controls.push(`<button class="button secondary" data-action="review_with_codex" ${handoff.codex_review===true?'':'disabled title="Codex is not logged in."'}>Review with Codex</button>`);
+    controls.push(`<button class="button secondary" data-action="continue_with_claude" ${handoff.claude_continue===true?'':'disabled title="Claude is not logged in."'}>Continue with Claude</button>`);
   }
   if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
   if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
@@ -308,7 +325,7 @@ function updateDetail(force=false) {
   const reasons = task.queue_reasons || [];
   const tabLabels=[['results','Results'],['diff','Code diff'],['log','Agent output'],['prompt','Prompt / instructions'],['attempts','Attempts']];
   const activeLabel=tabLabels.find(([id])=>id===detailTab)?.[1]||'Results';
-  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${(snapshot.agent_options||{})[task.backend]?`<div><span>Model / effort</span>${escapeHTML(task.model||'default')} / ${escapeHTML(task.effort||'default')}</div>`:''}${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}${reviewBlock}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
+  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${task.checks?`<div><span>Verified by</span>${escapeHTML(task.checks.join(', '))}</div>`:''}${task.after?`<div><span>Starts after</span>task ${escapeHTML(task.after)}</div>`:''}${(snapshot.agent_options||{})[task.backend]?`<div><span>Model / effort</span>${escapeHTML(task.model||'default')} / ${escapeHTML(task.effort||'default')}</div>`:''}${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}${reviewBlock}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
   $('#task-detail').querySelectorAll('textarea').forEach(el=>{if(saved[el.name])el.value=saved[el.name];});
   if (!force) $('#task-detail').querySelectorAll('details').forEach((el,i)=>{if(i<disclosureState.length)el.open=disclosureState[i];});
   if (!connected) $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
@@ -391,7 +408,7 @@ document.addEventListener('click',async e=>{
   const reviewInt = e.target.closest('[data-review-integration]'); if (reviewInt) {
     if (!connected||reviewInt.disabled) return;
     reviewInt.disabled=true;
-    const result=await command({action:'review_integration',project_id:reviewInt.dataset.reviewIntegration,agent:'claude'});
+    const result=await command({action:'review_integration',project_id:reviewInt.dataset.reviewIntegration,agent:reviewInt.dataset.agent||'claude'});
     if (result) toast(result.duplicate?'A matching review is already queued.':'Review queued; the verdict appears here when it finishes.');
     reviewInt.disabled=false; return;
   }
@@ -406,11 +423,12 @@ $('#notifications').onclick = async ()=>{
   try {const permission=await Notification.requestPermission();toast(permission==='granted'?'Notifications enabled while this page stays open.':'Notifications unavailable. The tab title still shows waiting tasks.');}
   catch (_) {toast('Notifications unavailable in this browser.');}
 };
-$('#task-project').onchange = ()=>populateSources();
+$('#task-project').onchange = ()=>{populateSources();syncFlowRow();};
 $('#task-form').onsubmit = async e=>{
   e.preventDefault();if(!connected)return;
   const form=e.currentTarget, button=form.querySelector('[type="submit"]');button.disabled=true;
   const fields=Object.fromEntries(new FormData(form));
+  delete fields.checks; const ticked=[...form.querySelectorAll('input[name="checks"]:checked')].map(i=>i.value); if(ticked.length)fields.checks=ticked;
   if(fields.source_task_id)fields.source_attempt_id=$('#task-source').selectedOptions[0]?.dataset.attempt;
   try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':simulation()?'Task queued for simulation.':'Task queued.');selectedTask=result.task_id;taskDetail=null;detailTab='results';updateDetail(true);$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);}
   catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}

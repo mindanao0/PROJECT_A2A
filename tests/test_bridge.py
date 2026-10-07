@@ -352,6 +352,50 @@ class Runtime(BridgeTest):
             self.create(DONE, agent="claude", effort="ultra")
         self.cmd(tid, "stop")
 
+    def test_the_gui_can_pick_checks_and_sees_usage_and_per_attempt_cost(self):
+        self.project({"a": "test -f src/a/a.py", "b": "true"})
+        (proj,) = self.b.snapshot()["projects"]
+        self.assertEqual(proj["checks"], ["a", "b"])
+        with self.assertRaisesRegex(ControlError, "list of check names"):
+            self.create(DONE, checks="a")
+        with self.assertRaisesRegex(ControlError, "unknown check"):
+            self.create(DONE, checks=["nope"])
+        tid = self.create(edit("src/a/a.py") + DONE, scope="src/a/", checks=["a"])
+        self.assertEqual(self.task(self.b.snapshot(), tid)["checks"], ["a"])
+        snap = self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
+        (att,) = self.task(snap, tid)["attempts"]
+        self.assertGreater(att["prompt_bytes"], 0)
+        self.assertEqual((att["usage"], att["model"], att["effort"]), (None, None, None))  # the fake agent exposes nothing
+        row = next(r for r in snap["usage"] if (r["agent"], r["kind"]) == ("fake", "implement"))
+        self.assertEqual((row["attempts"], row["outcomes"], row["with_usage"]), (1, {"done": 1}, 0))
+        self.store.x("update attempts set usage = ?, model = 'haiku', effort = 'low' where id = ?",
+                     json.dumps({"input": 900, "cached": 100, "output": 40, "turns": 2, "cost_usd": 0.01}), att["id"])
+        snap = self.b.snapshot()
+        (att,) = self.task(snap, tid)["attempts"]
+        self.assertEqual((att["usage"]["input"], att["model"], att["effort"]), (900, "haiku", "low"))
+        row = next(r for r in snap["usage"] if r["agent"] == "fake")
+        self.assertEqual((row["input"], row["cost_usd"], row["settings"]), (900, 0.01, ["haiku/low"]))
+
+    def test_any_agent_can_review_or_continue_when_logged_in(self):
+        tid = self.create(edit("src/x.py") + DONE)
+        self.pump(lambda s: self.task(s, tid)["state"] == "COMPLETED")
+        caps = self.b.snapshot()["capabilities"]["handoff"]
+        self.assertEqual((caps["codex_review"], caps["claude_continue"]), (False, False))
+        for action in ("review_with_codex", "continue_with_claude"):
+            with self.assertRaisesRegex(ControlError, "not logged in"):
+                self.cmd(tid, action)
+        self.login("codex")
+        self.login("claude")
+        r = self.cmd(tid, "review_with_codex")
+        review = self.task(self.b.snapshot(), r["task_id"])
+        self.assertEqual((review["backend"], review["kind"]), ("codex", "review"))
+        c = self.cmd(tid, "continue_with_claude")
+        cont = self.task(self.b.snapshot(), c["task_id"])
+        self.assertEqual((cont["backend"], cont["kind"]), ("claude", "task"))
+        self.assertEqual(cont["source"]["task_id"], tid)
+        self.cmd(r["task_id"], "stop")
+        self.cmd(c["task_id"], "stop")
+
 
 class Http(BridgeTest):
     def test_server_drives_the_real_runtime(self):

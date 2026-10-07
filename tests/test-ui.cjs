@@ -70,9 +70,10 @@ async function controls() {
     snapshot={tasks:[{id:'source-task',attempt_id:'replacement-source'}]};
   `,context);
   node('#task-source').selectedOptions=[{dataset:{attempt:'displayed-source'}}];
-  const form={fields:{source_task_id:'source-task'},querySelector(){return node('submit');}};
+  const form={fields:{source_task_id:'source-task'},querySelector(){return node('submit');},querySelectorAll(){return [{value:'logic'},{value:'html'}];}};
   await node('#task-form').onsubmit({preventDefault(){},currentTarget:form});
   assert.equal(context.submissions[0].source_attempt_id,'displayed-source','Source must bind to the displayed option rather than the latest snapshot');
+  assert.equal(JSON.stringify(context.submissions[0].checks),'["logic","html"]','Every ticked check is sent as a list (FormData alone keeps only the last value)');
 }
 // Agent model/effort settings: real mode only, escaped, current values selected.
 vm.runInContext(`globalThis.aop=agentOptionsPanel; snapshot={mode:'simulation',agent_options:{claude:{model:'x',effort:'low',efforts:['low'],models:[]}}};`,context);
@@ -85,6 +86,16 @@ assert(!panel.includes('<b>x</b>')&&!panel.includes('<i>m</i>'),'Model names mus
 assert(/<option selected>high<\/option>/.test(panel),'The configured effort is preselected');
 assert(panel.includes('name="claude_model"')&&panel.includes('name="codex_effort"'),'Both agents are editable');
 assert(panel.includes('<option value="">Default</option>'),'A blank means the CLI default');
+// Usage panel: real mode only, escaped, honest about what the CLIs did not expose.
+vm.runInContext(`globalThis.up=usagePanel; snapshot={mode:'simulation',usage:[{agent:'x',kind:'implement',attempts:1,outcomes:{done:1},seconds:1,prompt_bytes:1,input:1,cached:0,output:1,cost_usd:0,with_usage:1,settings:[]}]};`,context);
+assert.equal(context.up(),'','Simulation has no usage panel');
+vm.runInContext(`snapshot={mode:'real',usage:[
+  {agent:'<b>claude</b>',kind:'implement',attempts:2,outcomes:{done:1,failed:1},seconds:41.6,prompt_bytes:2048,input:43000,cached:33000,output:1200,cost_usd:0.0592,with_usage:2,settings:['haiku/low']},
+  {agent:'codex',kind:'review',attempts:1,outcomes:{done:1},seconds:9,prompt_bytes:5000,input:0,cached:0,output:0,cost_usd:0,with_usage:0,settings:['default/default']}]};`,context);
+const up = context.up();
+assert(!up.includes('<b>claude</b>'),'Agent names are escaped');
+assert(up.includes('43.0k (33.0k cached)')&&up.includes('$0.059')&&up.includes('haiku/low')&&up.includes('done:1 failed:1'),'Numbers shown');
+assert(/<td>-<\/td><td>-<\/td><td>-<\/td>/.test(up),'An agent that exposed no usage shows dashes, not zeros');
 // Integration strip: real mode only, escaped, button enabled only when the runtime says it can promote.
 vm.runInContext(`
   project='all';
@@ -105,9 +116,13 @@ assert((strip.match(/data-discard=/g)||[]).length===3,'Every integration offers 
 assert(!strip.includes('data-review-integration'),'No review button unless the runtime says a review is needed');
 vm.runInContext(`snapshot={mode:'real',capabilities:{handoff:{claude_review:false}},integration:[{project_id:'p',branch:'main',commit:'abcdef0123456789',tasks:[1,2],checks:[],can_promote:false,review_needed:true,reason:'needs a review',busy:null}]};`,context);
 const needs = context.strip();
-assert(/<button[^>]*data-review-integration[^>]*disabled/.test(needs),'Review needs a logged-in Claude');
-vm.runInContext(`snapshot.capabilities.handoff.claude_review=true;`,context);
-assert(!/<button[^>]*data-review-integration[^>]*disabled/.test(context.strip()),'Review is offered once Claude is logged in');
+const btn = (html, agent) => (html.match(new RegExp('<button[^>]*data-review-integration[^>]*data-agent="'+agent+'"[^>]*>'))||[''])[0];
+assert(btn(needs,'claude').includes('disabled')&&btn(needs,'codex').includes('disabled'),'Review needs a logged-in agent');
+vm.runInContext(`snapshot.capabilities.handoff={claude_review:true,codex_review:false};`,context);
+assert(!btn(context.strip(),'claude').includes('disabled'),'Review with Claude is offered once Claude is logged in');
+assert(btn(context.strip(),'codex').includes('disabled'),'Review with Codex stays off until Codex is logged in');
+vm.runInContext(`snapshot.capabilities.handoff={claude_review:false,codex_review:true};`,context);
+assert(!btn(context.strip(),'codex').includes('disabled')&&btn(context.strip(),'claude').includes('disabled'),'Each agent is gated by its own login');
 vm.runInContext(`snapshot={mode:'real',integration:[
   {project_id:'<b>p</b>',branch:'<i>main</i>',commit:'abcdef0123456789',tasks:[1,2],checks:[{name:'<u>unit</u>',rc:0},{name:'lint',rc:1}],can_promote:true,busy:null},
   {project_id:'q',branch:'main',commit:'1234567890abcdef',tasks:[3],checks:[],can_promote:false,reason:'your working tree has uncommitted changes',busy:null},

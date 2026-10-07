@@ -58,6 +58,8 @@
     <label>Task title<input name="title" id="task-title" required maxlength="120" placeholder="e.g. Review retrieval edge cases"></label>
     <label>Task description<textarea name="spec" id="task-spec" required maxlength="4000" rows="4" placeholder="Describe the outcome and acceptance criteria…"></textarea></label>
     <div class="form-row"><label>Project<select name="project_id" id="task-project"></select></label><label>Path scope<input name="scope" id="task-scope" value="src/" required maxlength="500" placeholder="src/, tests/"></label></div>
+    <div class="form-row" id="task-flow-row" hidden><label>Start after task (optional)<select name="after_task_id" id="task-after"><option value="">No dependency</option></select></label><fieldset id="task-checks"><legend>Verified by (optional)</legend><div id="task-checks-list"></div></fieldset></div>
+    <p class="field-help" id="task-flow-help" hidden>A dependent task starts only when that task is completed, from its result. Ticked checks verify this task alone (for parallel work whose checks need each other's files); integration always runs every check.</p>
     <label>Start from completed task<select name="source_task_id" id="task-source"><option value="">New task / no source</option></select></label>
     <p class="field-help" id="source-description">Source artifacts are copied as a simulation context reference; no Git branch is created.</p>
     <label>Agent<select id="task-agent" disabled><option>Fake agent / simulation</option><option disabled>Codex / adapter unavailable</option><option disabled>Claude Code / adapter unavailable</option></select></label>
