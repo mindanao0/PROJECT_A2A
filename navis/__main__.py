@@ -26,6 +26,8 @@ def main():
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--real", action="store_true",
                         help="drive the real runtime (sandboxed agents, projects from ~/.config/navis/projects)")
+    parser.add_argument("--no-runner", action="store_true",
+                        help="with --real: GUI only; run the agents with `navis-cli run` in a terminal")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
         parser.error("Port must be between 0 and 65535")
@@ -41,7 +43,7 @@ def main():
         raise SystemExit("Another Navis instance is already using this state directory")
     if args.real:
         from .bridge import Bridge
-        runtime = Bridge()
+        runtime = Bridge(runner=not args.no_runner)
     else:
         runtime = Runtime(state_dir / "control.sqlite3")
     server = ControlServer(runtime, args.port)

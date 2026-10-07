@@ -2,7 +2,7 @@
 
 สถานะ: **GUI foundation / simulation only** — ทำหน้าควบคุมและ state contract ที่ลองใช้งานได้ก่อนมี production Agent Runner ตาม D-012/D-013
 
-ธีม: **Cybernetics ดำ–แดง** — พื้นดำ, panel ขอบคม, accent แดง, typography สำหรับ ID/สถานะ และ focus ที่มองเห็นได้ ไม่มี animation ต่อเนื่อง
+ธีม: **Cybernetics ดำ–แดง** — ใช้โลโก้ NAVIS จากภาพอ้างอิงโดยตรงทั้ง sidebar และ command masthead, พื้นดำลึก, แดงสด, circuit traces, กรอบ HUD และแสงแดง; สถานะ connection/mode/dispatch อ่านจาก runtime จริง วง HUD หมุนช้าและหยุดเมื่อ offline/pause หรือผู้ใช้เปิด reduced motion; asset ทั้งหมดอยู่ในโปรเจกต์ ไม่โหลด font หรือภาพจากภายนอก
 
 ไม่ใช่รายงานว่า Phase 1 ผ่านแล้ว: ไม่มี provider CLI, sandbox, cgroup, workspace clone, MCP, local inference หรือ real verifier ใน implementation นี้ `fake-agent` ใน GUI เป็น in-process simulation ไม่ใช่ fake-agent CLI ที่มี edit/orphan/crash scenarios ใน Execution Design §6
 
@@ -50,6 +50,16 @@ navis
 ปิดด้วย Ctrl+C ใน terminal ที่รันอยู่ ข้อมูล task/event ยังอยู่ แต่ token จะเปลี่ยนทุกครั้งที่เปิด และ launch file จะถูกลบเมื่อปิดปกติ
 
 ## หน้าจอและวิธีใช้
+
+### Operator controls
+
+- **Ctrl+K / Cmd+K** หรือปุ่ม Command เปิด command palette: ค้นหาคำสั่ง, task title/ID/state และ project; ใช้ ↑/↓ เลือก, Enter เปิด และ Esc ปิด
+- **Alt+N** เปิด New task และ **Alt+1…7** เปลี่ยนหน้าตามลำดับเมนู คีย์ลัดเหล่านี้ไม่ทำงานขณะกรอกข้อมูลหรือมี dialog เปิดอยู่
+- คลิก statistic tile เพื่อเปิด Task board พร้อม task-group filter; selector แสดง filter ที่เลือก และเปลี่ยนกลับ All tasks ได้
+- **Operator required** รวมงานรอ input/approval/review ใน project ที่เลือก เรียงตามเวลาที่อัปเดตเก่าสุดก่อน เปิด request/diff ทีละงานก่อนตอบหรืออนุมัติ
+- Agent fleet ในโหมด real ใช้ provider/status/slot/cooldown ที่ runtime ส่งมาทั้งใน Overview และหน้า Agents; ไม่สร้าง worker จำลองหรือสถานะ login เอง
+- Completed แสดง progress จากจำนวนงานที่เสร็จ/งานทั้งหมด; footer แสดงเวลาท้องถิ่นและสถานะ sync โดยยืนยัน LIVE หลังรับ snapshot สำเร็จเท่านั้น ปุ่มคำสั่งที่ต้องเชื่อม runtime ถูกปิดเมื่อ offline
+
 
 | หน้า | ใช้ทำอะไร |
 | --- | --- |

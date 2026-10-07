@@ -2,9 +2,14 @@
 
 import http.client
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from navis import runtime
 from navis.bridge import Bridge
@@ -48,6 +53,89 @@ class BridgeTest(NavisTest):
     def cmd(self, tid, action, **extra):
         t = self.task(self.b.snapshot(), tid)
         return self.b.command({"action": action, "task_id": tid, "attempt_id": t["attempt_id"], **extra})
+
+
+class GuiWithoutRunner(NavisTest):
+    def test_task_made_in_the_gui_runs_in_a_separate_runner(self):
+        gui = Bridge(runner=False)  # takes no runner lock, so a terminal runner can own it
+        rt = runtime.Runtime(gui.store)
+        rt.start()
+        try:
+            tid = gui.command({"action": "create_task", "project_id": "p", "title": "t", "spec": edit("src/a.py", "1\n") + DONE,
+                               "scope": "src/", "agent": "fake"})["task_id"]
+            gui.tick()
+            self.assertEqual(gui.store.one("select status from tasks where id = ?", tid)["status"], "QUEUED")
+            self.assertTrue(rt.run_until_idle())
+            self.assertEqual(gui.store.one("select status from tasks where id = ?", tid)["status"], "COMPLETED")
+        finally:
+            rt.shutdown()
+            gui.close()
+
+
+@unittest.skipUnless(shutil.which("tmux"), "needs tmux")
+class ChatSessions(NavisTest):
+    """The GUI's chat view: only navis-chat-* tmux sessions, only whitelisted keys (a `cat` stands in for the agent)."""
+    NAME = "navis-chat-test-fake"
+
+    def setUp(self):
+        super().setUp()
+        # Own tmux server: real chats you have running must not leak into (or be killed by) the test.
+        sock = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": sock}))
+        os.environ.pop("TMUX", None)
+        self.b = Bridge(runner=False)
+        subprocess.run(["tmux", "new-session", "-d", "-x", "100", "-y", "20", "-s", self.NAME, "cat"], check=True)
+        subprocess.run(["tmux", "new-session", "-d", "-s", "other-session", "cat"], check=True)
+
+    def tearDown(self):
+        subprocess.run(["tmux", "kill-server"], capture_output=True)
+        self.b.close()
+        super().tearDown()
+
+    def test_type_read_and_refuse_everything_else(self):
+        self.assertEqual(self.b.command({"action": "chat_list"})["sessions"], [self.NAME])
+        self.b.command({"action": "chat_send", "session": self.NAME, "text": "/model", "enter": True})
+        self.assertIn("/model", self.b.command({"action": "chat_screen", "session": self.NAME})["screen"])
+        for bad in ({"action": "chat_screen", "session": "other-session"},
+                    {"action": "chat_send", "session": self.NAME, "key": "Bogus"},
+                    {"action": "chat_send", "session": self.NAME, "key": "C-"},
+                    {"action": "chat_send", "session": self.NAME, "key": "Enter; kill-server"},
+                    {"action": "chat_send", "session": self.NAME, "text": "x" * 2001},
+                    {"action": "chat_start", "project_id": "nope", "agent": "claude"},
+                    {"action": "chat_start", "project_id": "p", "agent": "fake"},
+                    {"action": "chat_start", "project_id": "p", "agent": "claude", "label": "a b"},
+                    {"action": "chat_close", "session": "other-session"}):
+            with self.assertRaises(ControlError, msg=bad):
+                self.b.command(bad)
+
+    def test_any_tmux_key_is_accepted(self):
+        for key in ("C-o", "M-b", "S-Tab", "BTab", "F2", "PPage", "C-M-Left", "C-Space", "Home"):
+            self.assertTrue(self.b.command({"action": "chat_send", "session": self.NAME, "key": key})["ok"], key)
+        self.b.command({"action": "chat_send", "session": self.NAME, "text": "pasted", "paste": True})
+        time.sleep(0.3)
+        self.assertIn("pasted", self.b.command({"action": "chat_screen", "session": self.NAME})["screen"])
+
+    def test_image_upload_lands_in_the_clone_and_its_path_in_the_input(self):
+        repo = runtime.data_dir() / "chats" / "x" / "repo"
+        (repo / ".git" / "info").mkdir(parents=True)
+        (repo / ".git" / "info" / "exclude").write_text("# a git clone has this file\n")
+        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@navis_repo", str(repo)], check=True)
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 20
+        path = self.b.chat_upload(self.NAME, "image/png", png)["path"]
+        self.assertEqual(open(path, "rb").read(), png)
+        self.assertIn(".navis-uploads/", (repo / ".git" / "info" / "exclude").read_text())
+        time.sleep(0.3)
+        self.assertIn(path, self.b.command({"action": "chat_screen", "session": self.NAME})["screen"])
+        for ctype, data in (("image/png", b"not a png"), ("text/html", b"<script>"), ("image/svg+xml", b"<svg>")):
+            with self.assertRaises(ControlError):
+                self.b.chat_upload(self.NAME, ctype, data)
+        with self.assertRaises(ControlError):
+            self.b.chat_upload("other-session", "image/png", png)
+
+    def test_close_stops_only_that_session(self):
+        self.b.command({"action": "chat_close", "session": self.NAME})
+        self.assertEqual(self.b.command({"action": "chat_list"})["sessions"], [])
+        self.assertEqual(subprocess.run(["tmux", "has-session", "-t", "other-session"]).returncode, 0)
 
 
 class Snapshot(BridgeTest):

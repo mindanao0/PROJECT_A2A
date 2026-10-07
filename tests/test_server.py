@@ -65,6 +65,14 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertIn("frame-ancestors 'none'",headers['Content-Security-Policy'])
         self.assertEqual(self.server.server_address[0],'127.0.0.1')
+        status, logo, headers = self.request(path='/navis-wordmark.png')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'image/png')
+        self.assertTrue(logo.startswith(b'\x89PNG\r\n\x1a\n'))
+        status, icon, headers = self.request(path='/navis-icon.svg')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'image/svg+xml')
+        self.assertIn(b'<svg', icon)
         for path in ['/../core.py','/core.py','/api/token']:
             self.assertEqual(self.request(path=path,headers=self.auth())[0],404)
 

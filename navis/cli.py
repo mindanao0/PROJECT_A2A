@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 import time
 
@@ -30,6 +31,37 @@ def show_task(store, tid):
         print(f"  {at} {e['attempt'] or '-':<6} {e['kind']:<12} {e['data'][:200]}")
 
 
+def chat(project, agent, label=""):
+    """Interactive claude/codex in the sandbox, kept alive in tmux; run again to re-attach.
+    No MCP tools and no task: you talk to the agent directly (slash commands, questions, menus)."""
+    new = runtime.chat_name(project, agent, label) not in runtime.chat_sessions()
+    name = runtime.chat_start(project, agent, label)
+    if new:
+        print(f"started {agent} ; detach with Ctrl-b d")
+    os.execvp("tmux", ["tmux", "attach", "-t", name])
+
+
+def logs(store, tid, follow):
+    """Readable agent output of the latest attempt; with -f, new lines as they arrive until the task leaves RUNNING."""
+    done, aid = 0, None
+    while True:
+        a = store.one("select id from attempts where task = ? order by started desc limit 1", tid)
+        if a and a["id"] != aid:
+            aid, done = a["id"], 0
+            print(f"--- attempt {aid}")
+        path = runtime.data_dir() / "attempts" / (aid or "-") / "agent.log"
+        lines = path.read_text(errors="replace").splitlines() if path.exists() else []
+        for line in lines[done:]:
+            text = runtime.format_log_line(line)
+            if text:
+                print(text, flush=True)
+        done = len(lines)
+        t = store.one("select status from tasks where id = ?", tid)
+        if not follow or not t or t["status"] != "RUNNING":
+            return
+        time.sleep(0.5)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="navis", description="Run coding agents on separate, sandboxed tasks.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -39,6 +71,8 @@ def main(argv=None):
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
     a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
+    a.add_argument("--model", default="", help="model for this task (default: the project's [agents.<agent>] model, then the CLI's)")
+    a.add_argument("--effort", default="", help="reasoning effort (claude: low, medium, high, xhigh, max)")
     a.add_argument("spec", help="task text, or - to read it from stdin")
     sub.add_parser("ls", help="list tasks")
     sub.add_parser("run", help="run the scheduler (one per machine)")
@@ -62,14 +96,24 @@ def main(argv=None):
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
     an = sub.add_parser("answer", help="answer the agent's question")
     an.add_argument("id", type=int)
-    an.add_argument("text")
+    an.add_argument("text", nargs="?", help="your answer, or the number of an offered option; omit to be asked")
+    lg = sub.add_parser("logs", help="what the agent said and did in the latest attempt (-f follows)")
+    lg.add_argument("id", type=int)
+    lg.add_argument("-f", "--follow", action="store_true")
+    ch = sub.add_parser("chat", help="talk to claude/codex interactively in the sandbox (tmux; run again to re-attach)")
+    ch.add_argument("project")
+    ch.add_argument("-a", "--agent", required=True, choices=["claude", "codex"])
+    ch.add_argument("-n", "--name", default="", help="extra chat on the same project and agent (own clone)")
     args = ap.parse_args(argv)
+    if args.cmd == "chat":
+        return chat(args.project, args.agent, args.name)
 
     store = runtime.open_store()
     if args.cmd == "add":
         spec = sys.stdin.read() if args.spec == "-" else args.spec
         try:
-            tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after)
+            tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after,
+                                         model=args.model, effort=args.effort)
         except ValueError as e:
             sys.exit(str(e))
         if dup:
@@ -134,9 +178,21 @@ def main(argv=None):
         print(f"fast-forwarded to {commit[:10]}")
     elif args.cmd == "stop":
         print(runtime.stop_task(store, args.id))
+    elif args.cmd == "logs":
+        logs(store, args.id, args.follow)
     elif args.cmd == "answer":
-        if not runtime.answer(store, args.id, args.text):
+        t = store.one("select status, note from tasks where id = ?", args.id)
+        if not t or t["status"] != "WAITING_INPUT":
             sys.exit(f"task {args.id} is not waiting for input")
+        options, text = runtime.ask_options(store, args.id), args.text
+        if text is None:  # ask here, with the agent's own choices numbered
+            print(t["note"])
+            print(*(f"  {i}) {o}" for i, o in enumerate(options, 1)), sep="\n")
+            text = input("answer" + (" (number or text): " if options else ": ")).strip()
+        if options and text.isdigit() and 1 <= int(text) <= len(options):
+            text = options[int(text) - 1]
+        if not text or not runtime.answer(store, args.id, text):
+            sys.exit(f"task {args.id} is not waiting for input" if text else "empty answer")
     elif args.cmd == "approve":
         if not runtime.approve(store, args.id):
             sys.exit(f"task {args.id} is not waiting for approval or review")
