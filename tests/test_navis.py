@@ -351,10 +351,10 @@ class Adapters(unittest.TestCase):
         self.assertEqual(env, {"CODEX_HOME": "/h"})
 
     @unittest.skipUnless(shutil.which("claude"), "claude not installed")
-    def test_claude_has_no_shell_or_web(self):
+    def test_claude_has_no_shell_and_web_only_when_allowed(self):
         with tempfile.TemporaryDirectory() as io:
             argv, env, _ = runtime.claude_cmd("p", ["py", "mcp.py", "s"], Path("/h"), Path(io))
-        self.assertIn("Bash,WebFetch,WebSearch,Task", argv)
+        self.assertIn("Bash,Task,WebFetch,WebSearch", argv)
         self.assertIn("--strict-mcp-config", argv)
         self.assertEqual(argv[argv.index("--tools") + 1], "Read,Edit,Write,Glob,Grep")
         self.assertEqual(env, {"CLAUDE_CONFIG_DIR": "/h"})

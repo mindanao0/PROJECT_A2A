@@ -14,7 +14,7 @@ class Routing(NavisTest):
         original = {a: runtime.ADAPTERS[a] for a in ("claude", "codex")}
         real = runtime.fake_cmd
         for a in original:  # both "real" agents are the scripted fake, so routing can be seen without quota
-            runtime.ADAPTERS[a] = lambda prompt, mcp, home, io, readonly=False, model="", effort="", _r=real: _r(prompt, mcp, home, io, readonly)
+            runtime.ADAPTERS[a] = lambda prompt, mcp, home, io, readonly=False, model="", effort="", _r=real, **_: _r(prompt, mcp, home, io, readonly)
         self.addCleanup(lambda: runtime.ADAPTERS.update(original))
         self.set_config(backoff=600)
 

@@ -14,7 +14,7 @@ navis = "navis.__main__:main"      # GUI (simulation by default, --real for the 
 navis-cli = "navis.cli:main"       # queue and inspect tasks from a terminal
 
 [tool.setuptools.package-data]
-navis = ["web/*.html", "web/*.css", "web/*.js"]
+navis = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.svg"]
 
 [tool.setuptools.packages.find]
 include = ["navis*"]

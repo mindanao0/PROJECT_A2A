@@ -25,7 +25,7 @@ class CLITests(unittest.TestCase):
 
     def test_single_instance_and_launch_cleanup(self):
         with tempfile.TemporaryDirectory() as folder:
-            args = [sys.executable, '-m', 'navis', '--no-browser', '--state-dir', folder]
+            args = [sys.executable, '-m', 'navis', '--sim', '--no-browser', '--state-dir', folder]
             proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
                 launch = Path(folder) / 'launch.url'
@@ -34,9 +34,10 @@ class CLITests(unittest.TestCase):
                     time.sleep(0.02)
                 self.assertTrue(launch.exists())
                 self.assertEqual(launch.stat().st_mode & 0o777, 0o600)
+                # A second `navis` opens the running one instead of failing.
                 other = subprocess.run(args, capture_output=True, text=True, timeout=5)
-                self.assertNotEqual(other.returncode, 0)
-                self.assertIn('Another Navis instance', other.stderr)
+                self.assertEqual(other.returncode, 0)
+                self.assertIn('already running: ' + launch.read_text().strip(), other.stderr)
             finally:
                 proc.send_signal(2)
                 proc.communicate(timeout=5)
