@@ -60,16 +60,11 @@ Internal protocol จะ:
 ข้อเสนอ: clone ต่อ attempt (`git clone --shared`) แทน worktree เพราะ worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout หลัก; ผล probe อยู่ใน [Execution Design](EXECUTION_DESIGN.md) §4
 ยังต้องวัด overhead กับ VELA จริง (checkout ประมาณ 482 MB ต่อ clone)
 
-## OD-008 Who can merge — OPEN
+## OD-008 Who can merge — RESOLVED
 
-D-003 ยืนยันอ่าน/แก้โค้ด/ทดสอบภายใน workspace ไม่ได้อนุมัติ push/merge/deploy หรือสิทธิ์ local commit รายละเอียด authority ยังต้องตัดสิน
-
-ตัวเลือก:
-- human only
-- verifier + policy auto-merge
-- configurable per project
-
-Default ช่วงแรกควร conservative
+D-014: ผู้ใช้เป็นผู้สั่ง; Runtime รวมงานบน integration branch ของ Navis (`refs/navis/integration/<project>`) แล้วรัน check ซ้ำบน commit สุดท้าย ผู้ใช้ fast-forward เข้า branch ของตัวเอง ไม่มี auto-merge
+เหตุผล: เกณฑ์ Phase 2 (evidence ผูก exact commit, stale เมื่อ rebase) ทำได้ก็ต่อเมื่อ Runtime เป็นคนสร้าง integration commit; ปลายทางเป็น branch ของ Navis จึงไม่แตะ working tree ของผู้ใช้
+เลื่อนไปก่อน: verifier + policy auto-merge (ต้องมีหลักฐานว่า verifier ตรงกับการตัดสินของผู้ใช้พอก่อน) และ config `merge` per project (เพิ่มเมื่อมีโหมดที่สองจริง)
 
 ## OD-009 Context Broker implementation
 
@@ -81,6 +76,8 @@ Default ช่วงแรกควร conservative
 - hybrid
 
 ไม่ควรเริ่มด้วยระบบ memory ซับซ้อนเกินจำเป็น
+
+**หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Navis ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI overhead ครองส่วนใหญ่) ข้อเสนอ: ยังไม่สร้าง Context Broker; เมื่อต้องการ ให้เริ่มจาก deterministic Git/file retrieval และวัดซ้ำด้วย `navis-cli usage` กับงานจริงที่ prompt ใหญ่ — ยังไม่ใช่คำตัดสินของผู้ใช้
 
 ## OD-010 Project configuration format — PROPOSED
 
@@ -97,6 +94,8 @@ Roles เป็น:
 ## OD-012 Cost/usage accounting
 
 Cloud subscription CLI อาจไม่ expose token/cost แบบ API ต้องกำหนด fallback metric เช่น turns/time/context size
+
+วัดจริงแล้ว: Claude เปิดเผย tokens/cache/`total_cost_usd`/turns; Codex เปิดเผย tokens/cached ต่อ turn แต่ไม่มีราคา; Runtime เก็บ prompt bytes + เวลา + usage ที่มีต่อ attempt (`navis-cli usage`) ฟิลด์ที่ไม่เปิดเผยเป็น `None`
 
 ## OD-013 Prompt-injection boundary
 

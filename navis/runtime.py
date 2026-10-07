@@ -18,7 +18,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import sandbox
+from . import agent_options, sandbox, usage
 from .store import Store
 
 # ponytail: generic pattern; replace with each CLI's real rate-limit text after the Phase 1b probes.
@@ -26,11 +26,15 @@ REVIEW_DIFF = 60_000
 QUOTA_RE = re.compile(r"rate.?limit|usage.?limit|quota", re.I)
 STOPPABLE = ("QUEUED", "WAITING_INPUT", "WAITING_APPROVAL", "WAITING_QUOTA", "REVIEW")
 DEFAULTS = {
-    "slots": {"codex": 1, "claude": 1, "fake": 2, "checks": 1},
+    "slots": {"codex": 1, "claude": 1, "fake": 2, "local": 1, "checks": 1},
     "limits": {"agent_memory": "3G", "check_memory": "4G", "attempt_timeout": 3600,
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600],
-               "review_rounds": 2, "max_delegations": 3},
+               "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
+    "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": ""},  # "" = the CLI's default
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
+    # Local coding is a role the user must switch on (D-004): off until the Agent Runner's tests are trusted.
+    "local": {"coding": False, "url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "max_turns": 20,
+              "max_tokens": 1024, "num_gpu": 0},  # num_gpu: 0 = Ollama decides; 99 = all layers on the GPU (see docs/PHASE4.md)
 }
 
 
@@ -65,7 +69,6 @@ def load_project(name):
             "protected": [x.strip("/") for x in p.get("protected", [])],
             "checks": p.get("checks", {}), "prepare": p.get("prepare", {}),
             "require_review": bool(p.get("require_review", False)),
-            "agents": {a: {k: str(v) for k, v in d.items()} for a, d in p.get("agents", {}).items()},  # [agents.claude] model, effort
             "ro": [os.path.expanduser(x) for x in sb.get("ro", [])],
             "prepare_rw": [os.path.expanduser(x) for x in sb.get("prepare_rw", [])],
             "prepare_inputs": sb.get("prepare_inputs", ["pyproject.toml", "uv.lock"])}
@@ -125,12 +128,9 @@ def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
             "-c", f"mcp_servers.navis.command={json.dumps(mcp[0])}",
             "-c", f"mcp_servers.navis.args={json.dumps(mcp[1:])}",
             # `exec` never asks, so MCP calls fail ("requires approval") unless pre-approved; only our own tools.
-            "-c", 'mcp_servers.navis.default_tools_approval_mode="approve"']
-    if model:
-        argv += ["-m", model]
-    if effort:
-        argv += ["-c", f"model_reasoning_effort={json.dumps(effort)}"]
-    return argv + [prompt], {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
+            "-c", 'mcp_servers.navis.default_tools_approval_mode="approve"',
+            *agent_options.flags("codex", model, effort), prompt]
+    return argv, {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
 
 
 def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
@@ -143,56 +143,54 @@ def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
             "--mcp-config", str(cfg), "--strict-mcp-config", "--permission-mode", "acceptEdits",
             "--tools", tools,  # default-deny: the built-in set also has Cron/RemoteTrigger/...
             "--allowedTools", f"{tools},mcp__navis",
-            "--disallowedTools", "Bash,WebFetch,WebSearch,Task"]
-    if model:
-        argv += ["--model", model]
-    if effort:
-        argv += ["--effort", effort]
+            "--disallowedTools", "Bash,WebFetch,WebSearch,Task", *agent_options.flags("claude", model, effort)]
     return argv, {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
 
 
-ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd}
+def local_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):  # the local model is set under [local]
+    cfg = load_config()["local"]
+    env = {"NAVIS_MCP": json.dumps(mcp), "NAVIS_LOCAL_URL": cfg["url"], "NAVIS_LOCAL_MODEL": cfg["model"],
+           "NAVIS_LOCAL_MAX_TURNS": str(cfg["max_turns"]), "NAVIS_LOCAL_MAX_TOKENS": str(cfg["max_tokens"]),
+           "NAVIS_LOCAL_NUM_GPU": str(cfg["num_gpu"]), "NAVIS_LOCAL_READONLY": "1" if readonly else "0"}
+    return [sandbox.PY, "-m", "navis.local_agent", prompt], env, []
+
+
+ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd, "local": local_cmd}
 
 
 # User commands
 
-MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,59}")
-CLAUDE_EFFORTS = ("low", "medium", "high", "xhigh", "max")  # from `claude --help`
-
-
-def check_model(agent, model, effort):
-    """claude: effort is one of its documented levels. codex: any lowercase word (its levels are not listed
-    by --help, so a wrong one fails the attempt with the CLI's own message)."""
-    if model and not MODEL_RE.fullmatch(model):
-        raise ValueError("model: letters, digits and . _ : [ ] - only (60 characters at most)")
-    if effort and not (effort in CLAUDE_EFFORTS if agent == "claude" else re.fullmatch(r"[a-z]{3,10}", effort)):
-        raise ValueError(f"effort for {agent}: " + (", ".join(CLAUDE_EFFORTS) if agent == "claude" else "a lowercase word"))
-    if (model or effort) and agent not in ("claude", "codex"):
-        raise ValueError(f"model and effort apply to claude and codex, not {agent}")
-
-
 def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", source=None, kind="", target=None,
-             after=None, parent=None, round=0, model="", effort=""):
-    """Queue a task. Returns (task id, None), or (None, id of the live duplicate).
-    model and effort override the project's [agents.<agent>] defaults for this task."""
+             after=None, parent=None, round=0, checks=None, model=None, effort=None):
+    """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
     if agent not in ADAPTERS:
         raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
-    check_model(agent, model, effort)
+    if agent == "local" and not load_config()["local"]["coding"]:
+        raise ValueError("local coding is off; set coding = true under [local] in config.toml to allow it")
     proj = load_project(project)
     scope = norm_scope(scope)
     sha = subprocess.run(["git", "-C", proj["path"], "rev-parse", "--verify", f"{base}^{{commit}}"],
                          capture_output=True, text=True, check=True).stdout.strip()
+    if model or effort:  # a per-task override of the [agents] setting
+        model, effort = agent_options.validate(agent, model, effort)
+    model, effort = model or None, effort or None
+    if checks is not None:  # a task may be verified by a subset of the project's checks (integration still runs all)
+        unknown = [c for c in checks if c not in proj["checks"]]
+        if unknown or not checks:
+            raise ValueError(f"unknown check(s) {', '.join(unknown) or '(none given)'}; available: {', '.join(proj['checks']) or 'none'}")
     if after is not None:  # starts from that task's result once it is COMPLETED
         dep = store.one("select project, kind from tasks where id = ?", after)
         if not dep or dep["project"] != project or dep["kind"] == "review":
             raise ValueError("after must be an implementation task in the same project")
-    key, now = task_key(project, spec, scope, f"{sha}+after{after}" if after is not None else sha), time.time()
+    salt = ((f"+after{after}" if after is not None else "") + (f"+checks{','.join(checks)}" if checks else "")
+            + (f"+model{model}" if model else "") + (f"+effort{effort}" if effort else ""))
+    key, now = task_key(project, spec, scope, sha + salt), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, model, effort)"
-                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?)",
+        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks, model, effort)"
+                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?,?)",
                          project, agent, spec, title or spec.strip().splitlines()[0][:80],
                          json.dumps(source) if source else "", json.dumps(scope), key, sha, now, now, kind, target,
-                         after, parent, round, model, effort)
+                         after, parent, round, json.dumps(checks) if checks else None, model, effort)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -268,7 +266,8 @@ def revise(store, tid, agent=None):
               "artifacts": [{"name": "result commit", "hash": t["head"]}]}
     rid, dup = add_task(store, t["project"], agent or t["agent"], t["spec"], json.loads(t["scope"]), t["head"],
                         f"Revise: {title}"[:120], source, round=t["round"] + 1,
-                        model=t["model"] if (agent or t["agent"]) == t["agent"] else "", effort=t["effort"] if (agent or t["agent"]) == t["agent"] else "")
+                        model=t["model"] if (agent or t["agent"]) == t["agent"] else None,
+                        effort=t["effort"] if (agent or t["agent"]) == t["agent"] else None)
     if rid:
         store.x("update tasks set context = ? where id = ?",
                 f"Reviewer findings on your previous result (revision round {t['round'] + 1} of {limit}); "
@@ -508,23 +507,35 @@ class Runtime:
         cooling = {r["agent"]: r["until"] for r in s.q("select * from cooldowns")}
         if is_paused(s):
             return
-        for t in s.q("select * from tasks where status in ('QUEUED', 'WAITING_QUOTA') order by id"):
+        # Fair share between projects: fewest running first, then least wall time used recently, then oldest.
+        recent = {r["project"]: r["secs"] for r in s.q(
+            "select t.project, sum(coalesce(a.ended, ?) - a.started) secs from attempts a join tasks t on t.id = a.task"
+            " where a.started >= ? group by t.project", now, now - self.cfg["limits"]["fairness_hours"] * 3600)}
+        cands = list(s.q("select * from tasks where status in ('QUEUED', 'WAITING_QUOTA') order by id"))
+
+        def runnable(t):
             if cooling.get(t["agent"], 0) > now:
-                continue
+                return False
             if sum(r["agent"] == t["agent"] for r in running) >= self.cfg["slots"].get(t["agent"], 1):
-                continue
+                return False
             if t["after"] is not None:
-                dep = s.one("select status, head from tasks where id = ?", t["after"])
+                dep = s.one("select status from tasks where id = ?", t["after"])
                 if not dep or dep["status"] != "COMPLETED":
-                    continue  # waits (a failed dependency keeps it queued; the GUI says why)
+                    return False  # waits (a failed dependency keeps it queued; the GUI says why)
             mine = json.loads(t["scope"])
             # A review reads one commit and writes nothing: it neither claims scope nor blocks anyone.
-            if t["kind"] != "review" and any(r["project"] == t["project"] and r["kind"] != "review"
-                                             and overlaps(mine, json.loads(r["scope"])) for r in running):
-                continue
+            return t["kind"] == "review" or not any(r["project"] == t["project"] and r["kind"] != "review"
+                                                    and overlaps(mine, json.loads(r["scope"])) for r in running)
+
+        while cands:
+            cands.sort(key=lambda t: (sum(r["project"] == t["project"] for r in running), recent.get(t["project"], 0.0), t["id"]))
+            t = next((c for c in cands if runnable(c)), None)
+            if t is None:
+                break
+            cands.remove(t)
             if s.move(t["id"], "RUNNING", ("QUEUED", "WAITING_QUOTA")):
                 if t["after"] is not None and not t["head"]:  # start from the dependency's result
-                    s.x("update tasks set base = ? where id = ?", dep["head"], t["id"])
+                    s.x("update tasks set base = (select head from tasks where id = ?) where id = ?", t["after"], t["id"])
                 running.append(t)
                 th = threading.Thread(target=self._run_attempt, args=(t["id"],), daemon=True)
                 self.threads.append(th)
@@ -619,9 +630,7 @@ class Runtime:
         base = t["head"] or t["base"]  # continue from the last snapshot
         s.x("insert into attempts(id, task, n, unit, base, status, started) values (?,?,?,?,?,'running',?)",
             aid, tid, n, unit, base, time.time())
-        model = t["model"] or proj["agents"].get(t["agent"], {}).get("model", "")
-        effort = t["effort"] or proj["agents"].get(t["agent"], {}).get("effort", "")
-        s.log(tid, aid, "attempt", n=n, base=base, agent=t["agent"], model=model, effort=effort)
+        s.log(tid, aid, "attempt", n=n, base=base, agent=t["agent"])
         sandbox.clone(proj["path"], repo, base, f"navis/{tid}/{n}")
         ro = [*proj["objects"], *proj["ro"]]
 
@@ -643,6 +652,9 @@ class Runtime:
         mcp = [sandbox.PY, str(sandbox.PKG / "mcp.py"), str(sock)]
         prompt = self._prompt(t, n, proj)
         (adir / "prompt.txt").write_text(prompt)  # shown in the GUI; outside io, so the agent cannot read it
+        model, effort = agent_options.effective(self.cfg, t["agent"], t["model"], t["effort"])
+        s.x("update attempts set model = ?, effort = ? where id = ?", model or None, effort or None, aid)
+        s.log(tid, aid, "settings", model=model or "default", effort=effort or "default")
         argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io, readonly=t["kind"] == "review", model=model, effort=effort)
         env["NAVIS_ATTEMPT"] = str(n)
         # io (socket, MCP config) is read-only: connect() still works, replacing them does not.
@@ -680,6 +692,9 @@ class Runtime:
             outcome = "quota"
         else:
             outcome = "crashed"
+        used = usage.parse(t["agent"], (adir / "agent.log").read_bytes()[-usage.TAIL:].decode(errors="replace"))
+        s.x("update attempts set prompt_bytes = ?, usage = ? where id = ?", len(prompt.encode()),
+            json.dumps(used) if used else None, aid)
         head = self._collect(t, aid, adir, ro, base, proj)
         self._finish(t, aid, adir, "leak" if head is None else outcome, state, head or base, proj, ro)
 
@@ -772,7 +787,7 @@ class Runtime:
 
     def _verify(self, t, aid, adir, proj, ro, head, summary):
         failures = []
-        for name in proj["checks"]:
+        for name in (json.loads(t["checks"]) if t["checks"] else proj["checks"]):
             rc, tail = self._check(aid, adir / "repo", proj, ro, name)
             self.store.log(t["id"], aid, "check", name=name, rc=rc, head=head, tail=self.redact(tail))
             if rc:
@@ -926,7 +941,8 @@ class Runtime:
                 if overlaps(scope, json.loads(r["scope"])) and str(r["id"]) != src]
         lines = [f"Navis task {t['id']}, attempt {n}. Work only inside the current directory.",
                  f"Edit only files under: {', '.join(scope)}.",
-                 f"Checks you can run with the run_check tool: {', '.join(proj['checks']) or 'none'}.",
+                 f"Checks you can run with the run_check tool: {', '.join(proj['checks']) or 'none'}."
+                 + (f" Your result is verified by: {', '.join(json.loads(t['checks']))}; the others belong to parallel work." if t["checks"] else ""),
                  'When finished, call report_result with status "done" or "failed" and a short summary.',
                  "If you need a decision from the user, call ask_user (pass options when the choices are known) and then stop."]
         if t["parent"] is None:

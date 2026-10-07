@@ -77,7 +77,7 @@ Codex implements -> Claude independently reviews -> verifier checks integration 
 
 เพิ่ม merge/integration queue, conflict handling และ rollback ของ managed workspace
 Review/test ต้องผูก exact commit; rebase/merge แล้วต้องตรวจ final integration commit ใหม่
-รายละเอียด local commit/merge authority ยังอยู่ใน OD-008; MVP ไม่ auto push/merge/deploy
+Merge authority ตาม D-014: Runtime รวมงานบน `refs/navis/integration/<project>` ผู้ใช้ fast-forward เอง; MVP ไม่ auto push/merge/deploy
 
 Exit: สอง agent ไม่เขียน workspace/resource ชนกัน; late result และ stale evidence ไม่ถูกยอมรับ
 
@@ -115,11 +115,26 @@ Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wi
 ไม่ถือว่า context fingerprint เท่ากับ provider cache hit
 กำหนด retention/cleanup และ project scheduling fairness ตาม usage จริง
 
+### Phase 3 status (2026-10-06)
+
+มีแล้ว: usage accounting ต่อ attempt (`navis-cli usage`), fair scheduling ระหว่าง project ตาม usage จริง, retention (`navis-cli gc`), bounded cache และ benchmark เทียบ agent เดี่ยวกับ implement → review (`probes/bench.py`) — ผลและข้อจำกัดอยู่ใน [Phase 3 measurements](PHASE3.md)
+ผลหลัก: ในงานเล็ก 3 งานทุก config ได้คะแนนเต็ม (วัดคุณภาพไม่แยก), pipeline ใช้เวลา ~4× และ input tokens ~2.8× ของ Claude เดี่ยว, และ context ที่ Navis ส่งเป็นเพียง ~1–4% ของ input tokens (overhead ของ CLI ครองส่วนใหญ่) จึงเลื่อน Context Broker ออกไปจนกว่าจะวัดงานจริงที่ prompt ใหญ่
+
+### Model และ effort ต่อ agent
+
+ตั้งได้ที่ `[agents] claude_model / claude_effort / codex_model / codex_effort` ใน `config.toml` (ว่าง = ค่าเริ่มต้นของ CLI), หน้า Settings, `navis-cli agent-options`, และ override ต่องานด้วย `add --model --effort` หรือช่องในฟอร์มสร้างงาน ส่งเป็น `--model/--effort` (Claude) และ `-m` กับ `-c model_reasoning_effort=...` (Codex); ค่าที่ใช้จริงบันทึกต่อ attempt (`navis-cli usage` แสดงคอลัมน์ SETTINGS)
+ยืนยันกับ CLI จริงที่ค่าต่ำสุด: Claude ใช้ Haiku (`claude-haiku-4-5-20251001`) ตามที่ตั้งจริง (ดูจาก `modelUsage` ใน log) เทียบกับค่าเริ่มต้น `claude-sonnet-5-5`; Codex ยอมรับ `model_reasoning_effort="low"` และงานผ่าน แต่ **ยืนยันไม่ได้ว่า effort เปลี่ยนพฤติกรรม** (ค่าปลอมไม่ทำให้ Codex ฟ้อง ใช้พิสูจน์ไม่ได้ และ log ไม่แสดง effort) ตามคำสั่งให้ทดสอบที่ค่าต่ำสุดจึงไม่ได้ลองระดับสูง
+
 ## Phase 4 — Optional local coding
 
 สร้าง/ขยาย Agent Runner: tool loop, validation, permission enforcement, bounded turns, cancellation และ recovery
 เปิด local coding หลังผ่าน tool/permissions/workspace acceptance tests และมีการอนุญาตบทบาทนั้น
 ไม่บังคับให้ local helper เปลี่ยนเป็น coder เพื่อให้ MVP เสร็จ
+
+### Phase 4 status (2026-10-06)
+
+Agent Runner ของ local model สร้างและทดสอบแล้ว (`navis/local_agent.py`, adapter `local`): tool loop ที่จำกัดรอบ/คำสั่งผิด/คำสั่งซ้ำ/ความยาวต่อรอบ, permission enforcement (ไม่มี shell, path ถูกตรวจกับ workspace, ห้าม `.git`, symlink ออกนอกไม่ได้), cancellation และ recovery ผ่าน cgroup/Runner เดิม — ทุกเกณฑ์ของ MVP Contract มี test
+**บทบาทปิดเป็นค่าเริ่มต้น และแนะนำให้คงปิด:** ผลวัดกับโมเดล 7B ไม่มีงานใดจาก 3 งานผ่านครบ (cloud ผ่านครบ) และรอบ revision ที่ Claude รีวิวก็ไม่ช่วย รายละเอียดและวิธีเปิดอยู่ใน [Phase 4](PHASE4.md)
 
 ## Phase 5 — Advanced orchestration and UI
 

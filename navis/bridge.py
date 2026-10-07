@@ -13,17 +13,18 @@ import threading
 import tomllib
 from pathlib import Path
 
-from . import integrate, runtime, sandbox
+from . import agent_options, integrate, runtime, sandbox
 from .core import ControlError, clean_text, normalize_scope
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
 LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
 PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
              ("codex", "Codex", "Codex CLI adapter (unverified)"),
-             ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"))
-SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4),
+             ("claude", "Claude Code", "Claude Code CLI adapter (unverified)"),
+             ("local", "Local model", "Local coding agent over a loopback model (tools: files + checks, no shell)"))
+SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4), ("slots.local", "Local model slots", 1, 2),
             ("slots.claude", "Claude Code slots", 1, 4), ("limits.attempt_timeout", "Attempt timeout (seconds)", 60, 86400))
-MAX_DIFF, MAX_LOG, MAX_PROMPT = 200_000, 30_000, 20_000
+MAX_DIFF, MAX_LOG, MAX_PROMPT, MAX_DIFFS = 200_000, 30_000, 20_000, 64
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
@@ -34,8 +35,7 @@ KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHEC
 def message(kind, d):
     if kind == "status":
         return f"{d['status']}: {d.get('note') or ''}".rstrip(": ")
-    return {"attempt": lambda: f"Attempt {d.get('n')} started on {d.get('agent')} from {str(d.get('base'))[:10]}"
-                               + (f" ({', '.join(x for x in (d.get('model'), d.get('effort') and 'effort ' + d['effort']) if x)})" if d.get("model") or d.get("effort") else ""),
+    return {"attempt": lambda: f"Attempt {d.get('n')} started on {d.get('agent')} from {str(d.get('base'))[:10]}",
             "ask": lambda: f"Agent asked: {d.get('question')}" + (f" [options: {' | '.join(d['options'])}]" if d.get("options") else ""),
             "tool": lambda: f"Agent called {d.get('tool')}",
             "check": lambda: f"Check {d.get('name')}: exit {d.get('rc')}",
@@ -109,6 +109,8 @@ class Bridge:
         return out
 
     def logged_in(self, name):
+        if name == "local":  # no login: a role the user switches on in config.toml
+            return bool(self.rt.cfg["local"]["coding"])
         f = LOGIN_FILE.get(name)
         return not f or (runtime.data_dir() / "agents" / name / f).exists()
 
@@ -120,9 +122,10 @@ class Bridge:
             out.append({"id": pid, "name": name, "ok": ok, "slots_used": busy.get(pid, 0), "slot_limit": slots.get(pid, 1),
                         "status": "Unavailable" if not ok else "Cooldown" if until else "Busy" if busy.get(pid) else "Ready",
                         "cooldown_until": until, "capability": desc,
-                        "reason": "Not logged in" if not ok else None,
-                        "message": ("Log in this agent's Navis account once, outside the GUI (see the README). "
-                                    "Your normal CLI login is not used.") if not ok else
+                        "reason": ("Local coding is off" if pid == "local" else "Not logged in") if not ok else None,
+                        "message": (("Set coding = true under [local] in config.toml to allow local coding." if pid == "local" else
+                                     "Log in this agent's Navis account once, outside the GUI (see the README). "
+                                     "Your normal CLI login is not used.")) if not ok else
                                    "Provider cooldown starts when the CLI reports a quota or rate limit." if pid != "fake" else
                                    "Runs scripted scenarios inside the same sandbox as real agents."})
         return out
@@ -136,6 +139,8 @@ class Bridge:
         """Full patch plus per-file scope/protected classification, cached per commit pair."""
         key = (t["project"], t["base"], t["head"], t["scope"])
         if key not in self.diffs:
+            while len(self.diffs) >= MAX_DIFFS:  # bounded cache: drop the oldest entry
+                self.diffs.pop(next(iter(self.diffs)))
             git = ["git", "-C", proj["path"]]
             patch = subprocess.run([*git, "diff", "--no-ext-diff", "--no-textconv", "--no-color", t["base"], t["head"]],
                                    capture_output=True, text=True, errors="replace").stdout
@@ -258,7 +263,7 @@ class Bridge:
                        "expires": t["updated"] + 86400, "payload_hash": "",
                        "options": runtime.ask_options(self.store, tid) if state == "WAITING_INPUT" else []}
         return {
-            "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "model": t["model"], "effort": t["effort"], "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -296,13 +301,30 @@ class Bridge:
                 "tasks": [self.task_view(t, c, False) for t in c["rows"]],
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
-                "integration": self.integration(),
+                "integration": self.integration(), "agent_options": self.agent_options(),
                 "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
                 "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
                               "memory_available": True, "mode": "real"},
                 "capabilities": {"fake": "scripted, sandboxed", "codex": "unverified", "claude": "unverified", "local": "not connected",
                                  "controls": {"graceful_stop": False},
                                  "handoff": {"claude_review": self.logged_in("claude"), "codex_continue": self.logged_in("codex")}}}
+
+    def agent_options(self):
+        """Per agent: the configured model/effort ('' = the CLI default) and what the GUI may offer."""
+        cfg = self.rt.cfg["agents"]
+        return {a: {"model": cfg[f"{a}_model"], "effort": cfg[f"{a}_effort"], "efforts": list(agent_options.EFFORTS[a]),
+                    "models": agent_options.known_models(a, runtime.data_dir() / "agents")}
+                for a in agent_options.AGENTS}
+
+    def set_agent_options(self, p):
+        agent = p.get("agent")
+        try:
+            model, effort = agent_options.save(runtime.config_dir() / "config.toml", agent, str(p.get("model") or ""),
+                                               str(p.get("effort") or ""))
+        except ValueError as e:
+            raise ControlError(str(e))
+        self.rt.cfg["agents"].update({f"{agent}_model": model, f"{agent}_effort": effort})
+        return {"ok": True, "message": f"{agent}: model {model or 'default'}, effort {effort or 'default'}. Applies to attempts that start from now on."}
 
     def integration(self):
         out = []
@@ -387,6 +409,12 @@ class Bridge:
             return self.update_settings(p.get("values"))
         if action == "create_task":
             return self.create_task(p)
+        if action == "set_agent_options":
+            return self.set_agent_options(p)
+        if action == "verify_integration":
+            if p.get("project_id") not in {x["id"] for x in self.projects()}:
+                raise ControlError("Unknown project")
+            return self.start_verify(p["project_id"])
         if action in ("review_integration", "discard_integration"):
             if p.get("project_id") not in {x["id"] for x in self.projects()}:
                 raise ControlError("Unknown project")
@@ -478,6 +506,26 @@ class Bridge:
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "message": "Integrating; checks run on the merged commit. Watch the activity log."}
 
+    def start_verify(self, project):
+        with self.lock:
+            if project in self.integrating:
+                raise ControlError("An integration is already running for this project")
+            self.integrating[project] = "verify"
+
+        def work():
+            try:
+                integrate.verify(self.rt, project)
+            except integrate.IntegrationError:
+                pass  # recorded as an event the GUI shows
+            except Exception as e:
+                self.store.log(None, None, "integrate-error", error=f"unexpected: {e!r}"[:300])
+            finally:
+                with self.lock:
+                    self.integrating.pop(project, None)
+
+        threading.Thread(target=work, daemon=True).start()
+        return {"ok": True, "message": "Running every check on the integration commit. Watch the activity log."}
+
     def hand_off(self, t, aid, agent):
         if t["status"] != "COMPLETED" or not t["head"]:
             raise ControlError("Only a completed task with a result can be handed off")
@@ -524,7 +572,7 @@ class Bridge:
             tid, dup = runtime.add_task(self.store, project, p.get("agent") or "fake",
                                         clean_text(p.get("spec"), "Task description"), normalize_scope(p.get("scope")),
                                         base, clean_text(p.get("title"), "Title", 120), source, after=after,
-                                        model=str(p.get("model") or "").strip(), effort=str(p.get("effort") or "").strip())
+                                        model=str(p.get("model") or "") or None, effort=str(p.get("effort") or "") or None)
         except (ValueError, subprocess.CalledProcessError) as e:
             raise ControlError(f"Cannot queue task: {e}"[:300])
         return {"task_id": str(dup or tid), "duplicate": bool(dup)}

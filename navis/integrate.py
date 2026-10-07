@@ -42,8 +42,9 @@ def merge(path, ours, theirs, message):
     return commit, []
 
 
-def run_checks(rt, t, proj, commit, tip):
-    """Checks on a clone of exactly `commit`; [(name, rc, tail)]."""
+def run_checks(rt, t, proj, commit, tip, names=None):
+    """Checks (default: the task's own, else all) on a clone of exactly `commit`; [(name, rc, tail)]."""
+    names = names or (json.loads(t["checks"]) if t["checks"] else list(proj["checks"]))
     if proj["prepare"] and not t["approved"] and sandbox.inputs_changed(proj["path"], tip, commit, proj["prepare_inputs"]):
         raise IntegrationError("dependency files changed; approve this task's prepare step first")
     lim, aid = rt.cfg["limits"], f"i{t['id']}"
@@ -58,7 +59,7 @@ def run_checks(rt, t, proj, commit, tip):
                                      True, lim["check_memory"], lim["check_timeout"])
             if rc:
                 return [(f"prepare {name}", rc, tail)]
-        return [(name, *rt._check(aid, repo, proj, ro, name)) for name in proj["checks"]]
+        return [(name, *rt._check(aid, repo, proj, ro, name)) for name in names]
     finally:
         shutil.rmtree(repo.parent, ignore_errors=True)
 
@@ -127,7 +128,7 @@ def status(store, project):
     ref, head = REF.format(project), git(path, "rev-parse", "HEAD")[1]
     tip = git(path, "rev-parse", "--verify", "-q", ref)[1]
     out = {"project": project, "commit": tip or None, "head": head, "branch": git(path, "symbolic-ref", "-q", "--short", "HEAD")[1],
-           "tasks": [], "checks": [], "can_promote": False, "reason": "", "review_needed": False}
+           "tasks": [], "checks": [], "can_promote": False, "reason": "", "review_needed": False, "verify_needed": False}
     if not tip or ancestor(path, tip, head):
         return out | {"reason": "nothing to promote"}
     seen = []
@@ -142,6 +143,9 @@ def status(store, project):
         out["reason"] = "your branch moved; integrate a task again to bring it in"
     elif not ev:
         out["reason"] = "no passing checks recorded for this exact commit"
+    elif not set(proj["checks"]) <= {c["name"] for c in ev["checks"]}:
+        missing = [c for c in proj["checks"] if c not in {x["name"] for x in ev["checks"]}]
+        out |= {"reason": f"not every check has run on this exact commit (missing: {', '.join(missing)})", "verify_needed": True}
     elif proj["require_review"] and not runtime.commit_approved(store, tip):
         out |= {"reason": "this project requires an approving review of this exact integration commit", "review_needed": True}
     elif not out["branch"]:
@@ -185,3 +189,29 @@ def discard(store, project, expected=None):
             raise IntegrationError(f"could not discard: {err}")
     store.log(None, None, "integration-discarded", project=project, commit=tip)
     return tip
+
+
+def verify(rt, project):
+    """Run every project check on the integration commit. A task integrates with its own checks only (parallel
+    halves cannot satisfy the other half's checks); promote needs all of them to have passed on the exact tip."""
+    proj = runtime.load_project(project)
+    path, ref = proj["path"], REF.format(project)
+    with LOCKS[project]:
+        tip = git(path, "rev-parse", "--verify", "-q", ref)[1]
+        last = rt.store.one("select * from tasks where id = (select max(task) from events where kind = 'integrate')"
+                            " and project = ?", project)
+        if not tip or not last:
+            raise IntegrationError("there is no integration branch to verify")
+        try:
+            results = run_checks(rt, last, proj, tip, tip, names=list(proj["checks"]))
+        except IntegrationError as e:
+            rt.store.log(last["id"], None, "integrate-error", error=str(e))
+            raise
+        ok = all(rc == 0 for _, rc, _ in results)
+        rt.store.log(last["id"], None, "integrate", project=project, commit=tip, base=tip, ok=ok,
+                     checks=[{"name": n, "rc": rc, "tail": rt.redact(tail)} for n, rc, tail in results])
+        if not ok:
+            msg = "checks failed on the integration commit: " + ", ".join(n for n, rc, _ in results if rc)
+            rt.store.log(last["id"], None, "integrate-error", error=msg)
+            raise IntegrationError(msg)
+        return tip
