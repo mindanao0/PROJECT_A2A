@@ -58,8 +58,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.equal(git('status', '--porcelain').trim(), '');
     // A dependent task verified by one check, created from the form; the usage view lists the finished attempts.
     await page.getByRole('button', {name: '+ New task', exact: true}).click();
-    await page.getByLabel('Task title', {exact: true}).fill('Add y after x');
-    await page.getByLabel('Task description', {exact: true}).fill(
+    await page.getByLabel('Title (optional)', {exact: true}).fill('Add y after x');
+    await page.getByLabel('What should the agent do?', {exact: true}).fill(
       '[[step]]\ndo = "edit"\npath = "src/y.py"\ntext = "y = 1\\n"\n[[step]]\ndo = "mcp"\ntool = "report_result"\nargs = {status = "done", summary = "ok"}\n');
     await page.locator('#task-agent').selectOption('fake');
     await page.locator('#task-after').selectOption({index: 1});
