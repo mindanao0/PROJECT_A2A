@@ -17,7 +17,7 @@ source = source.slice(0,-'start();\n'.length);
 vm.runInContext(source,context);
 vm.runInContext(`
 snapshot={mode:'simulation',paused:false,projects:[],tasks:[]};
-globalThis.renderers={renderDiff,queueHint,artifactBlock,detailPanel,updateAttention,countdown};
+globalThis.renderers={renderDiff,queueHint,artifactBlock,detailPanel,updateAttention,countdown,paletteMatches,paletteEntries,matchesTaskGroup,operatorQueue,agentPanel};
 `,context);
 const fixture = {id:'task-safe',state:'COMPLETED',spec:'<script>prompt</script>',instructions:[],artifacts:[{
   id:'artifact-safe',name:'<img src=x onerror=alert(1)>',kind:'diff',attempt_id:'attempt-safe',hash:'abc',simulated:false,
@@ -44,6 +44,34 @@ context.renderers.updateAttention(null,{tasks:[{pending:{id:'request'}}]});
 assert(context.document.title.includes('(1 waiting)'));
 assert.equal(context.renderers.countdown(0),'Awaiting runtime update');
 assert(!source.includes('localStorage'));
+// Search must match task state + title together, and cached tasks stay disabled offline.
+vm.runInContext(`
+  snapshot={mode:'real',paused:false,projects:[{id:'project-a',name:'Project Alpha'}],tasks:[
+    {id:'task-review',title:'Review <img src=x> parser',state:'REVIEW',backend:'codex',project_id:'project-a',updated_at:10},
+    {id:'task-done',title:'Finished parser',state:'COMPLETED',backend:'codex',project_id:'project-a',updated_at:9}
+  ]};connected=true;
+`,context);
+assert.equal(context.renderers.paletteMatches('review parser')[0].id,'task-review');
+assert.equal(context.renderers.paletteMatches('project alpha')[0].kind,'project');
+assert.equal(context.renderers.paletteMatches('no such command xyz').length,0);
+assert(context.renderers.matchesTaskGroup({state:'REVIEW'},'attention'));
+assert(!context.renderers.matchesTaskGroup({state:'CANCELLED'},'completed'));
+assert(!context.renderers.matchesTaskGroup({state:'COMPLETED'},'active'));
+const queue=context.renderers.operatorQueue([{id:'task-"<script>',title:'<img src=x>',state:'REVIEW',updated_at:10}]);
+assert(!queue.includes('<img'));
+assert(queue.includes('&lt;img'));
+assert(queue.includes('Inspect diff'));
+vm.runInContext('connected=false;',context);
+assert(context.renderers.paletteEntries().find(item=>item.id==='new').disabled);
+assert(context.renderers.paletteEntries().find(item=>item.id==='task-review').disabled);
+assert(!context.renderers.paletteEntries().find(item=>item.id==='refresh').disabled);
+vm.runInContext(`snapshot.providers=[{id:'codex',name:'Codex <img src=x>',status:'Busy',slots_used:2,slot_limit:3,capability:'Sandboxed CLI'}];`,context);
+const fleet=context.renderers.agentPanel();
+assert(fleet.includes('2 / 3 slots'),'Overview fleet must use runtime slot counts');
+assert(fleet.includes('Busy'));
+assert(!fleet.includes('In-process simulation'),'Real fleet must not invent a simulated worker');
+assert(!fleet.includes('<img'));
+
 async function controls() {
   vm.runInContext(`
     connected=true;selectedTask='task-control';

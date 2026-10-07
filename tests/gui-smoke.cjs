@@ -12,7 +12,7 @@ const assert = require('node:assert/strict');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 (async () => {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'navis-gui-'));
-  const server = spawn(process.env.PYTHON || 'python3', ['-m','navis','--no-browser','--state-dir',folder], {stdio:'ignore'});
+  const server = spawn(process.env.PYTHON || 'python3', ['-m','navis','--sim','--no-browser','--state-dir',folder], {stdio:'ignore'});
   let browser;
   try {
     for (let i=0;i<100&&!fs.existsSync(path.join(folder,'launch.url'));i++) await wait(100);
@@ -26,6 +26,32 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert(!page.url().includes('token='),'Token must be removed from address bar');
     await page.reload();
     await page.getByText('Nothing waiting on you').waitFor();
+    // Operator commands: keyboard navigation, explicit actions and form protection.
+    await page.keyboard.press('Control+k');
+    await page.locator('#command-dialog[open]').waitFor();
+    await page.getByRole('combobox',{name:'Search commands, tasks and projects'}).fill('your agents');
+    await page.keyboard.press('Enter');
+    await page.getByRole('heading',{name:'Your agents',exact:true}).waitFor();
+    await page.keyboard.press('Alt+1');
+    await page.getByRole('heading',{name:'Control room',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Open command palette',exact:true}).click();
+    await page.locator('#command-search').fill('create new task');
+    await page.keyboard.press('Enter');
+    await page.locator('#task-dialog[open]').waitFor();
+    await page.getByLabel('Task title',{exact:true}).fill('Keep my draft');
+    await page.keyboard.press('Alt+2');
+    assert(await page.locator('#task-dialog').isVisible(),'Shortcut must not abandon an open form');
+    assert.equal(await page.getByLabel('Task title',{exact:true}).inputValue(),'Keep my draft');
+    await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:'Open command palette',exact:true}).click();
+    await page.locator('#command-search').fill('nothing matches this query');
+    await page.getByText('No matches. Try a task title, NAV ID or project name.').waitFor();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    assert(await page.locator('#command-dialog').isVisible(),'Empty search must not run a command');
+    await page.keyboard.press('Escape');
+    assert(await page.getByRole('button',{name:'Open command palette',exact:true}).evaluate(el=>el===document.activeElement),'Escape must restore opener focus');
+    assert.equal(await page.locator('#sync-state').textContent(),'SYNC / LIVE');
     async function create(title,scenario) {
       await page.getByRole('button',{name:'+ New task',exact:true}).click();
       await page.getByLabel('Task title',{exact:true}).fill(title);
@@ -36,6 +62,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     }
     await create('Approval lifecycle', 'approval');
     await page.getByRole('button',{name:'Approve simulation',exact:true}).waitFor();
+    assert.equal(await page.locator('.operator-request').count(),1,'Pending approval must appear in operator queue');
     await page.getByRole('button',{name:'Approve simulation',exact:true}).click();
     await page.locator('#task-detail .badge.completed').waitFor();
     await page.locator('#detail-dialog').getByRole('button',{name:'Close task details',exact:true}).click();
@@ -58,6 +85,11 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.locator('#confirm-dialog').getByRole('button',{name:'Confirm kill',exact:true}).click();
     await page.locator('#task-detail .badge.cancelled').waitFor();
     await page.locator('#detail-dialog').getByRole('button',{name:'Close task details',exact:true}).click();
+    await page.getByRole('button',{name:'Show completed tasks',exact:true}).click();
+    assert.equal(await page.locator('#group-filter').inputValue(),'completed');
+    assert.equal(await page.locator('.task-card').count(),2);
+    assert.equal(await page.locator('.task-card .badge.completed').count(),2);
+    await page.locator('.sidebar').getByRole('button',{name:'Overview',exact:true}).click();
     await page.locator('.sidebar').getByRole('button',{name:'Artifacts',exact:true}).click();
     assert.equal(await page.locator('.artifact').count(),4);
     await page.locator('.sidebar').getByRole('button',{name:/Task board/}).click();
@@ -79,6 +111,16 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.getByRole('button',{name:'Refresh',exact:true}).click();
     await page.getByRole('heading',{name:'<img src=x onerror=alert(1)>',exact:true}).waitFor();
     assert.equal(await page.locator('.task-card img').count(),0);
+    await page.keyboard.press('Control+k');
+    await page.locator('#command-search').fill('<img');
+    assert.equal(await page.locator('.command-option').count(),1);
+    assert.equal(await page.locator('.command-option img').count(),0,'Palette task titles must be escaped');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await page.locator('#detail-dialog[open]').waitFor();
+    assert.equal(await page.locator('#detail-dialog img').count(),0);
+    await page.locator('#detail-dialog').getByRole('button',{name:'Close task details',exact:true}).click();
+
     // Fresh screenshot with clearly simulated, descriptive work.
     await send({action:'create_task',project_id:'project-vela',title:'Review context broker boundaries',spec:'Confirm local-only context routing in the simulation.',scope:'src/context/',scenario:'approval'});
     await send({action:'create_task',project_id:snap.projects.find(p=>p.name==='PROJECT_NAVIS').id,title:'Design the agent control contract',spec:'Exercise lifecycle controls using fake-agent.',scope:'navis/',scenario:'success'});
@@ -100,7 +142,14 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.locator('#detail-dialog').getByRole('button',{name:'Close task details',exact:true}).click();
     await page.getByRole('alert').filter({hasText:'Connection unavailable'}).waitFor();
     assert(await page.getByRole('button',{name:'+ New task',exact:true}).isDisabled());
-    console.log('Browser checks passed: approval, input, stop, retry, kill, filters, project creation, escaping, mobile, disconnect.');
+    assert.equal(await page.locator('#sync-state').textContent(),'SYNC / OFFLINE');
+    await page.keyboard.press('Control+k');
+    await page.locator('#command-search').fill('create new task');
+    assert(await page.getByRole('option').isDisabled(),'Offline palette must disable new tasks');
+    await page.keyboard.press('Enter');
+    assert(await page.locator('#command-dialog').isVisible(),'Offline action must not execute');
+
+    console.log('Browser checks passed: command keyboard/search/navigation, draft protection, operator queue, statistic filters, palette escaping/offline, approval, input, stop, retry, kill, projects, mobile and disconnect.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGINT');

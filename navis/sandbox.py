@@ -1,6 +1,7 @@
 """bwrap / systemd scope wrappers and git helpers (docs/EXECUTION_DESIGN.md §2-§4, §7)."""
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,6 +61,21 @@ def clone(project, repo, base, branch):
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null"}
     subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", project, str(repo)], check=True, env=env)
     subprocess.run([*GIT, "-C", str(repo), "checkout", "-q", "-b", branch, base], check=True, env=env)
+
+
+def overlay(project, repo):
+    """Copy the project's working tree over a fresh clone: uncommitted and untracked files, but nothing
+    git-ignored (.env, node_modules, .claude/settings.local.json). Files deleted in the tree are deleted here."""
+    out = subprocess.run(["git", "-C", project, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                         capture_output=True, check=True).stdout
+    for name in filter(None, out.split(b"\0")):
+        src, dst = Path(project, os.fsdecode(name)), Path(repo, os.fsdecode(name))
+        if src.is_symlink() or src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.unlink(missing_ok=True)
+            shutil.copy2(src, dst, follow_symlinks=False)
+        elif not src.exists():
+            dst.unlink(missing_ok=True)
 
 
 def fetch(project, bundle, ref):

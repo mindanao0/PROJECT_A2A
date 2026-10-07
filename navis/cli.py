@@ -1,20 +1,50 @@
-"""navis command line."""
+"""navis command line. `navis` alone opens the GUI; `navis <command>` works from any folder, and a project
+is the one whose repository holds the current folder unless -p names another."""
 
 import argparse
+import getpass
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
 import time
+from pathlib import Path
 
-from . import agent_options, helper, integrate, retention, runtime, usage
+from . import agent_options, helper, integrate, retention, runtime, sandbox, usage
+
+DONE = ("COMPLETED", "FAILED", "CANCELLED")
+NEEDS_YOU = {"WAITING_INPUT": "answer it: navis answer {id}", "WAITING_APPROVAL": "approve it: navis approve {id}",
+             "REVIEW": "look at it in the GUI, then: navis approve {id} / navis reject {id}"}
+
+
+def ago(seconds):
+    seconds = int(seconds)
+    return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m{seconds % 60:02d}s" if seconds < 3600 else f"{seconds // 3600}h{seconds % 3600 // 60:02d}m"
+
+
+def project_arg(name):
+    """-p, else the project of the current folder."""
+    name = name or runtime.project_for(os.getcwd())
+    if not name:
+        sys.exit("this folder is not in a Navis project: run `navis init` in the repository, or pass -p NAME")
+    return name
 
 
 def show_tasks(store):
     rows = store.q("select * from tasks order by id")
-    print(f"{'ID':>4}  {'STATUS':<16} {'AGENT':<7} {'PROJECT':<10} {'SCOPE':<20} NOTE")
+    print(f"{'ID':>4}  {'STATUS':<16} {'AGENT':<7} {'PROJECT':<10} {'SCOPE':<14} NOTE")
+    now = time.time()
     for t in rows:
         scope = ",".join(json.loads(t["scope"]))
         note = t["note"].splitlines()[0][:60] if t["note"] else ""
-        print(f"{t['id']:>4}  {t['status']:<16} {t['agent']:<7} {t['project']:<10} {scope[:20]:<20} {note}")
+        if t["status"] == "RUNNING":  # is it moving? time since start and since the agent last wrote output
+            a = store.one("select id, started from attempts where task = ? order by started desc limit 1", t["id"])
+            log = runtime.attempt_log(a["id"]) if a else None
+            out = f", output {ago(now - log.stat().st_mtime)} ago" if log and log.exists() else ", no output yet"
+            note = f"running {ago(now - a['started'])}{out}" if a else note
+        print(f"{t['id']:>4}  {t['status']:<16} {t['agent']:<7} {t['project']:<10} {scope[:14]:<14} {note}")
 
 
 def show_task(store, tid):
@@ -30,67 +60,331 @@ def show_task(store, tid):
         print(f"  {at} {e['attempt'] or '-':<6} {e['kind']:<12} {e['data'][:200]}")
 
 
+def chat(project, agent, label=""):
+    """Interactive claude/codex in the sandbox, kept alive in tmux; run again to re-attach.
+    No MCP tools and no task: you talk to the agent directly (slash commands, questions, menus)."""
+    new = runtime.chat_name(project, agent, label) not in runtime.chat_sessions()
+    name = runtime.chat_start(project, agent, label)
+    if new:
+        print(f"started {agent} ; detach with Ctrl-b d")
+    os.execvp("tmux", ["tmux", "attach", "-t", name])
+
+
+def logs(store, tid, follow):
+    """Readable agent output of the latest attempt. With -f: live, with status changes, until the task is done
+    or needs you; a line every minute the agent stays silent, so a hang is visible."""
+    done, aid, status, quiet = 0, None, None, time.time()
+    while True:
+        t = store.one("select status, note from tasks where id = ?", tid)
+        if not t:
+            sys.exit(f"no task {tid}")
+        if follow and t["status"] != status:
+            status = t["status"]
+            print(f"[{time.strftime('%H:%M:%S')}] {status}" + (f": {t['note'].splitlines()[0][:200]}" if t["note"] else ""), flush=True)
+        a = store.one("select id, started from attempts where task = ? order by started desc limit 1", tid)
+        if a and a["id"] != aid:
+            aid, done, quiet = a["id"], 0, time.time()
+            print(f"--- attempt {aid}", flush=True)
+        path = runtime.attempt_log(aid or "-")
+        lines = path.read_text(errors="replace").splitlines() if path.exists() else []
+        root = runtime.data_dir() / "attempts" / (aid or "-") / "repo"
+        for line in lines[done:]:
+            text = runtime.readable_log(line, root)
+            if text:
+                print(text, flush=True)
+                quiet = time.time()
+        done = len(lines)
+        if not follow or t["status"] in DONE or t["status"] in NEEDS_YOU:
+            if follow and t["status"] in NEEDS_YOU:
+                print(NEEDS_YOU[t["status"]].format(id=tid))
+            return
+        if t["status"] == "RUNNING" and a and time.time() - quiet >= 60:
+            print(f"… still running ({ago(time.time() - a['started'])}), no output for {ago(time.time() - quiet)}", flush=True)
+            quiet = time.time()
+        time.sleep(0.5)
+
+
+def save_server(**values):
+    """Change [server] keys in config.toml, keeping everything else."""
+    import tomllib
+    from .bridge import dump_toml
+    f = runtime.config_dir() / "config.toml"
+    cfg = tomllib.loads(f.read_text()) if f.exists() else {}
+    cfg.setdefault("server", {}).update(values)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(dump_toml(cfg))
+
+
+def passwd():
+    from .server import hash_password
+    f = runtime.config_dir() / "password"
+    pw = getpass.getpass("New Navis password (empty removes it and turns remote access off): ")
+    if not pw:
+        f.unlink(missing_ok=True)
+        print("password removed")
+        return
+    if len(pw) < 8:
+        sys.exit("use at least 8 characters")
+    if getpass.getpass("Again: ") != pw:
+        sys.exit("the passwords differ")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(f, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        out.write(hash_password(pw) + "\n")
+    print("password set; the GUI asks for it when you have no launch link (a running Navis picks it up at once)")
+
+
+def remote(off):
+    """Reach the GUI from your other devices on any network: `tailscale serve` puts it on https://<this machine>
+    inside your tailnet (not the public internet), and Navis allows that name once a password is set."""
+    if not shutil.which("tailscale"):
+        sys.exit("install Tailscale on this machine and your other devices first: https://tailscale.com/download")
+    port = runtime.load_config()["server"]["port"]
+    if off:
+        subprocess.run(["tailscale", "serve", "--https=443", "off"])
+        save_server(hosts=[])
+        print("remote access off")
+        return
+    if not (runtime.config_dir() / "password").exists():
+        sys.exit("set a password first: navis passwd")
+    st = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True)
+    try:
+        host = json.loads(st.stdout)["Self"]["DNSName"].rstrip(".")
+    except (ValueError, KeyError, TypeError):
+        sys.exit(f"tailscale is not connected: {st.stderr.strip() or 'run `sudo tailscale up`'}")
+    if subprocess.run(["tailscale", "serve", "--bg", str(port)]).returncode:
+        sys.exit("tailscale serve failed. If it says access denied, run once: sudo tailscale set --operator=$USER\n"
+                 "If it asks to enable HTTPS, open the link it printed, then run navis remote again.")
+    save_server(hosts=[host])
+    if subprocess.run(["systemctl", "--user", "try-restart", "navis"], capture_output=True).returncode == 0:
+        print("restarted the navis service with the new address")
+    else:
+        print("restart Navis if it is running, so it accepts the new address")
+    print(f"open https://{host} on any device signed in to your tailnet (phone: the Tailscale app), then sign in")
+
+
+UNIT = """[Unit]
+Description=Navis: coding agents and their control GUI (127.0.0.1:{port})
+After=network-online.target
+
+[Service]
+ExecStart={py} -m navis gui --no-browser
+Environment=PATH={path}
+Environment=PYTHONPATH={pkg}
+Restart=on-failure
+# Only Navis itself stops; chats (tmux) and agents (their own scopes) are not killed with it.
+KillMode=process
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def service(action):
+    """Run Navis in the background as a systemd user service: the GUI and the runner stay up without a terminal."""
+    unit = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user" / "navis.service"
+    ctl = ["systemctl", "--user"]
+    if action == "remove":
+        subprocess.run([*ctl, "disable", "--now", "navis"])
+        unit.unlink(missing_ok=True)
+        subprocess.run([*ctl, "daemon-reload"])
+        print("navis service removed")
+        return
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    port = runtime.load_config()["server"]["port"]
+    unit.write_text(UNIT.format(port=port, py=sys.executable, path=os.environ.get("PATH", "/usr/bin:/bin"), pkg=sandbox.PKG.parent))
+    subprocess.run([*ctl, "daemon-reload"], check=True)
+    if subprocess.run([*ctl, "enable", "--now", "navis"]).returncode:
+        sys.exit(f"could not start it; see: journalctl --user -u navis -e")
+    print(f"navis runs in the background on http://127.0.0.1:{port}; `navis` opens it, logs: journalctl --user -u navis -f")
+    linger = subprocess.run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger", "--value"], capture_output=True, text=True)
+    if linger.stdout.strip() != "yes":
+        print("to keep it running after you log out and start it at boot, run once: loginctl enable-linger")
+
+
+def doctor(name):
+    """Try what tasks need, inside the real sandbox, before a task fails on it."""
+    bad = 0
+
+    def report(label, ok, hint=""):
+        nonlocal bad
+        bad += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {label}" + (f"\n     {hint}" if hint and not ok else ""))
+
+    for tool in ("git", "bwrap", "systemd-run", "tmux", "setsid"):
+        report(tool, shutil.which(tool), "install it with your package manager")
+    if bad:
+        return 1
+    r = subprocess.run(sandbox.scope(f"navis-doctor-{os.getpid()}", "256M", sandbox.bwrap("/", net=False) + ["true"]),
+                       capture_output=True, text=True)
+    report("sandbox (bwrap in a systemd scope)", r.returncode == 0, r.stderr.strip()[-300:])
+    for agent in ("claude", "codex"):
+        exe = shutil.which(agent)
+        if not exe:
+            report(f"{agent}: CLI on PATH", False, "not installed (fine if you do not use it)")
+            continue
+        exe = Path(exe).resolve()
+        home = runtime.data_dir() / "agents" / agent
+        home.mkdir(parents=True, exist_ok=True)
+        extra = str(exe.parent if agent == "claude" else exe.parent.parent)
+        r = subprocess.run(sandbox.bwrap("/", rw=[home], ro=[extra]) + [str(exe), "--version"], capture_output=True, text=True, timeout=60)
+        report(f"{agent}: runs inside the sandbox", r.returncode == 0, (r.stderr or r.stdout).strip()[-300:])
+        report(f"{agent}: logged in for Navis", (home / runtime.LOGIN_FILE[agent]).exists(),
+               "run: " + ("CLAUDE_CONFIG_DIR=~/.local/share/navis/agents/claude claude auth login" if agent == "claude"
+                          else "CODEX_HOME=~/.local/share/navis/agents/codex codex login --device-auth"))
+    names = [name] if name else [runtime.project_for(os.getcwd())] if runtime.project_for(os.getcwd()) else \
+        sorted(f.stem for f in (runtime.config_dir() / "projects").glob("*.toml"))
+    rt = runtime.Runtime(runtime.open_store())
+    for p in names:
+        try:
+            proj = runtime.load_project(p)
+        except Exception as e:
+            report(f"project {p}: config", False, str(e)[:300])
+            continue
+        if not proj["checks"]:
+            report(f"project {p}: has checks", False, f"no [checks] in {runtime.config_dir() / 'projects' / (p + '.toml')}: results are not verified")
+            continue
+        head = subprocess.run(["git", "-C", proj["path"], "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        try:
+            results = integrate.run_checks(rt, {"id": "doctor", "project": p, "checks": None, "approved": 1}, proj, head, head)
+        except Exception as e:
+            report(f"project {p}: checks", False, str(e)[:300])
+            continue
+        for check, rc, tail in results:
+            hint = tail[-400:]
+            missing = re.search(r"(\S+): (?:command )?not found", tail)
+            found = missing and shutil.which(missing.group(1))
+            if found and found.startswith(sandbox.HOME + "/"):  # hidden with $HOME inside the sandbox
+                hint = (f"{missing.group(1)} lives in your home folder, which the sandbox hides; add under [sandbox] in the project file:\n"
+                        f"     ro = [{json.dumps(str(Path(found).resolve().parent))}]  (and any folder it needs, e.g. its cache)")
+            report(f"project {p}: check {check} passes in the sandbox (on HEAD {head[:10]})", rc == 0,
+                   hint if found else f"(not a sandbox problem if your code at HEAD really fails it)\n{hint}")
+    print("all good" if not bad else f"{bad} problem(s)")
+    return 1 if bad else 0
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="navis", description="Run coding agents on separate, sandboxed tasks.")
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("add", help="queue a task")
-    a.add_argument("-p", "--project", required=True, help="name of ~/.config/navis/projects/<name>.toml")
-    a.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
-    a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable)")
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help")):
+        argv = ["gui", *argv]  # `navis` alone (or with GUI flags) opens the GUI
+    ap = argparse.ArgumentParser(prog="navis", description="Run coding agents on separate, sandboxed tasks. "
+                                 "`navis` alone opens the GUI. Inside a project folder -p is not needed.",
+                                 epilog="start here: navis init (in a repository), navis add \"what to change\", navis logs -f ID")
+    sub = ap.add_subparsers(dest="cmd", metavar="command")
+    from .__main__ import gui_args
+    gui_args(sub.add_parser("gui", help="open the control GUI (the default); starts it if it is not running"))
+    i = sub.add_parser("init", help="make the Git repository you are in a Navis project")
+    i.add_argument("name", nargs="?", help="default: the folder name")
+    a = sub.add_parser("add", help="queue a task: navis add \"fix the login bug\"")
+    a.add_argument("-p", "--project", help="default: the project of the current folder")
+    a.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
+    a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable; default: everything)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
     a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
     a.add_argument("--model", help="model for this task only (default: the [agents] setting, else the CLI default)")
     a.add_argument("--effort", help="effort for this task only")
     a.add_argument("--check", action="append", dest="checks", metavar="NAME",
                    help="verify this task with only these project checks (repeatable); integration still runs all")
-    a.add_argument("spec", help="task text, or - to read it from stdin")
-    sub.add_parser("ls", help="list tasks")
-    sub.add_parser("run", help="run the scheduler (one per machine)")
+    a.add_argument("-f", "--follow", action="store_true", help="then show the agent's output live, as `navis logs -f`")
+    a.add_argument("spec", help="what to do (short is fine), or - to read it from stdin")
+    sub.add_parser("ls", help="list tasks (running ones show how long and when they last wrote output)")
+    sub.add_parser("run", help="run tasks in this terminal, without the GUI (one runner per machine)")
     for name, help_ in [("show", "task details and events"), ("stop", "stop or cancel a task"),
                         ("approve", "approve a task waiting for approval or in review"),
-                        ("reject", "reject a task in review")]:
+                        ("reject", "reject a task in review"),
+                        ("apply", "write a completed task's changes into your project folder (uncommitted)")]:
         sub.add_parser(name, help=help_).add_argument("id", type=int)
     sub.add_parser("summarize", help="summarize a task with the local model (sources cited)").add_argument("id", type=int)
     sub.add_parser("integrate", help="merge a completed task into the integration branch (checks run on the result)").add_argument("id", type=int)
     rv = sub.add_parser("review", help="queue a read-only review of a completed task's exact result")
     rv.add_argument("id", type=int)
-    rv.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
+    rv.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
     rv2 = sub.add_parser("revise", help="queue a bounded follow-up round that addresses a review's findings")
     rv2.add_argument("id", type=int)
     rv2.add_argument("-a", "--agent", choices=sorted(runtime.ADAPTERS), help="default: the original agent")
     ri = sub.add_parser("review-integration", help="queue a read-only review of the merged integration commit")
-    ri.add_argument("project")
-    ri.add_argument("-a", "--agent", required=True, choices=sorted(runtime.ADAPTERS))
-    sub.add_parser("discard", help="roll back: drop a project's integration branch").add_argument("project")
+    ri.add_argument("project", nargs="?")
+    ri.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
+    sub.add_parser("discard", help="roll back: drop a project's integration branch").add_argument("project", nargs="?")
     u = sub.add_parser("usage", help="what attempts cost: time, context bytes and the tokens the CLIs exposed")
     u.add_argument("-p", "--project")
     u.add_argument("--hours", type=float, default=24 * 7)
     g = sub.add_parser("gc", help="delete old attempt directories of finished tasks")
     g.add_argument("--days", type=int, help="default: [limits] retention_days (30)")
     g.add_argument("--dry-run", action="store_true")
-    sub.add_parser("verify-integration", help="run every check on a project's integration commit").add_argument("project")
+    sub.add_parser("verify-integration", help="run every check on a project's integration commit").add_argument("project", nargs="?")
     ao = sub.add_parser("agent-options", help="show or set the model and effort an agent runs with (empty = the CLI default)")
     ao.add_argument("agent", nargs="?", choices=agent_options.AGENTS)
     ao.add_argument("--model")
     ao.add_argument("--effort")
-    sub.add_parser("integration", help="show a project's integration branch").add_argument("project")
-    sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project")
+    sub.add_parser("integration", help="show a project's integration branch").add_argument("project", nargs="?")
+    sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project", nargs="?")
     an = sub.add_parser("answer", help="answer the agent's question")
     an.add_argument("id", type=int)
-    an.add_argument("text")
+    an.add_argument("text", nargs="?", help="your answer, or the number of an offered option; omit to be asked")
+    lg = sub.add_parser("logs", help="what the agent said and did in the latest attempt (-f: live)")
+    lg.add_argument("id", type=int)
+    lg.add_argument("-f", "--follow", action="store_true")
+    ch = sub.add_parser("chat", help="talk to claude/codex interactively in the sandbox (tmux; run again to re-attach)")
+    ch.add_argument("project", nargs="?", help="default: the project of the current folder")
+    ch.add_argument("-a", "--agent", default="claude", choices=["claude", "codex", "shell"],
+                    help="default: claude; shell = plain bash in the same sandbox")
+    ch.add_argument("-n", "--name", default="", help="extra chat on the same project and agent (own clone)")
+    sub.add_parser("passwd", help="set the password the GUI asks for (needed for remote access)")
+    rm = sub.add_parser("remote", help="open the GUI to your other devices through Tailscale (any network)")
+    rm.add_argument("--off", action="store_true")
+    sv = sub.add_parser("service", help="keep Navis running in the background (systemd user service)")
+    sv.add_argument("action", choices=["install", "remove"])
+    sub.add_parser("doctor", help="check the sandbox, agent logins and each project's checks before real tasks").add_argument("project", nargs="?")
     args = ap.parse_args(argv)
+    if args.cmd == "gui":
+        from .__main__ import run_gui
+        return run_gui(args)
+    if args.cmd in ("chat", "review-integration", "discard", "verify-integration", "integration", "promote"):
+        args.project = project_arg(args.project)
+    if args.cmd == "chat":
+        return chat(args.project, args.agent, args.name)
+    if args.cmd == "init":
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+        if top.returncode:
+            sys.exit("run this inside a Git repository (git init first if it is a new folder)")
+        root = Path(top.stdout.strip())
+        if runtime.project_for(root) and runtime.project_for(root) != args.name:
+            sys.exit(f"already a project: {runtime.project_for(root)}")
+        try:
+            f = runtime.create_project(args.name or re.sub(r"[^A-Za-z0-9._-]", "-", root.name).lstrip("._-") or "project", str(root))
+        except ValueError as e:
+            sys.exit(str(e))
+        print(f"project {f.stem} -> {root}\nadd your test commands under [checks] in {f} so results are verified\n"
+              f"then: navis doctor   and   navis add \"what to change\"")
+        return
+    if args.cmd == "passwd":
+        return passwd()
+    if args.cmd == "remote":
+        return remote(args.off)
+    if args.cmd == "service":
+        return service(args.action)
+    if args.cmd == "doctor":
+        return doctor(args.project)
 
     store = runtime.open_store()
     if args.cmd == "add":
         spec = sys.stdin.read() if args.spec == "-" else args.spec
+        project = project_arg(args.project)
         try:
-            tid, dup = runtime.add_task(store, args.project, args.agent, spec, args.scope, args.base, after=args.after,
+            tid, dup = runtime.add_task(store, project, args.agent, spec, args.scope, args.base, after=args.after,
                                           checks=args.checks, model=args.model, effort=args.effort)
-        except ValueError as e:
+        except (ValueError, subprocess.CalledProcessError) as e:
             sys.exit(str(e))
         if dup:
             sys.exit(f"duplicate of task {dup}; not queued")
         print(tid)
+        if not runtime.runner_active():
+            print("note: nothing is running tasks yet; open `navis` (GUI) or run `navis service install` once", file=sys.stderr)
+        if args.follow:
+            logs(store, tid, True)
+        else:
+            print(f"queued for {args.agent} on {project}; watch it live: navis logs -f {tid}", file=sys.stderr)
     elif args.cmd == "ls":
         show_tasks(store)
     elif args.cmd == "show":
@@ -184,9 +478,27 @@ def main(argv=None):
         print(f"fast-forwarded to {commit[:10]}")
     elif args.cmd == "stop":
         print(runtime.stop_task(store, args.id))
+    elif args.cmd == "apply":
+        try:
+            files = runtime.apply_result(store, args.id)
+        except (ValueError, subprocess.CalledProcessError) as e:
+            sys.exit(f"not applied: {e}")
+        print("written into your project folder (uncommitted):", *files, sep="\n  ")
+    elif args.cmd == "logs":
+        logs(store, args.id, args.follow)
     elif args.cmd == "answer":
-        if not runtime.answer(store, args.id, args.text):
+        t = store.one("select status, note from tasks where id = ?", args.id)
+        if not t or t["status"] != "WAITING_INPUT":
             sys.exit(f"task {args.id} is not waiting for input")
+        options, text = runtime.ask_options(store, args.id), args.text
+        if text is None:  # ask here, with the agent's own choices numbered
+            print(t["note"])
+            print(*(f"  {i}) {o}" for i, o in enumerate(options, 1)), sep="\n")
+            text = input("answer" + (" (number or text): " if options else ": ")).strip()
+        if options and text.isdigit() and 1 <= int(text) <= len(options):
+            text = options[int(text) - 1]
+        if not text or not runtime.answer(store, args.id, text):
+            sys.exit(f"task {args.id} is not waiting for input" if text else "empty answer")
     elif args.cmd == "approve":
         if not runtime.approve(store, args.id):
             sys.exit(f"task {args.id} is not waiting for approval or review")

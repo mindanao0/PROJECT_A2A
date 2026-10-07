@@ -6,11 +6,15 @@ import itertools
 import json
 import os
 import re
+import secrets
+import shlex
 import shutil
 import signal
 import socket
 import sqlite3
+import struct
 import subprocess
+import termios
 import threading
 import time
 import tomllib
@@ -28,8 +32,10 @@ DEFAULTS = {
     "limits": {"agent_memory": "3G", "check_memory": "4G", "attempt_timeout": 3600,
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600],
                "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
-    "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": ""},  # "" = the CLI's default
+    # model/effort "" = the CLI's default; web: agents may search and read web pages (their commands and checks stay offline)
+    "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": "", "web": True},
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
+    "server": {"port": 8765, "hosts": []},  # hosts: names a proxy on this machine serves the GUI under (navis remote)
     # Local coding is a role the user must switch on (D-004): off until the Agent Runner's tests are trusted.
     "local": {"coding": False, "url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "max_turns": 20,
               "max_tokens": 1024, "num_gpu": 0},  # num_gpu: 0 = Ollama decides; 99 = all layers on the GPU (see docs/PHASE4.md)
@@ -66,10 +72,27 @@ def load_project(name):
     return {"path": path, "objects": object_dirs(f"{common}/objects"),
             "protected": [x.strip("/") for x in p.get("protected", [])],
             "checks": p.get("checks", {}), "prepare": p.get("prepare", {}),
-            "require_review": bool(p.get("require_review", False)),
+            "require_review": bool(p.get("require_review", False)), "auto_apply": bool(p.get("auto_apply", False)),
             "ro": [os.path.expanduser(x) for x in sb.get("ro", [])],
+            "rw": [outside_dir(x, path) for x in sb.get("rw", [])],
             "prepare_rw": [os.path.expanduser(x) for x in sb.get("prepare_rw", [])],
             "prepare_inputs": sb.get("prepare_inputs", ["pyproject.toml", "uv.lock"])}
+
+
+SECRET_DIRS = (".ssh", ".gnupg", ".aws", ".kube", ".docker", ".password-store", ".local/share/keyrings")
+
+
+def outside_dir(raw, project):
+    """A [sandbox] rw folder: outside the repository, edited directly by the agent (no review, no undo by Navis).
+    Refused: your home or anything above it, Navis' own state, the repository itself, credential folders."""
+    p, home = Path(os.path.expanduser(raw)).resolve(), Path.home().resolve()
+    if not p.is_dir():
+        raise ValueError(f"[sandbox] rw: {raw} is not an existing folder")
+    near = [data_dir().resolve(), config_dir().resolve(), Path(project).resolve()]
+    if p == home or p in home.parents or any(p == b or p in b.parents or b in p.parents for b in near) \
+            or any(p == home / d or home / d in p.parents for d in SECRET_DIRS):
+        raise ValueError(f"[sandbox] rw: {raw} is not allowed (your home, Navis' state, the repository itself or a credential folder)")
+    return str(p)
 
 
 def object_dirs(objects):
@@ -85,6 +108,61 @@ def object_dirs(objects):
             todo += [str(Path(d, line).resolve()) for line in alt.read_text().splitlines()
                      if line and not line.startswith("#")]
     return dirs
+
+
+NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
+LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
+
+
+def project_for(path):
+    """The configured project whose repository holds `path` (the innermost one), or None."""
+    path, best = Path(path).resolve(), (None, -1)
+    for f in (config_dir() / "projects").glob("*.toml"):
+        try:
+            root = Path(os.path.expanduser(tomllib.loads(f.read_text())["path"])).resolve()
+        except (OSError, KeyError, ValueError):
+            continue
+        if (path == root or root in path.parents) and len(root.parts) > best[1]:
+            best = (f.stem, len(root.parts))
+    return best[0]
+
+
+def create_project(name, path):
+    """Register a Git repository root as a project. Returns the config file; ValueError when it cannot."""
+    if not NAME_RE.match(name):
+        raise ValueError("Name may use letters, digits, '.', '_' and '-' only")
+    path = Path(os.path.expanduser(path)).resolve()
+    top = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], capture_output=True, text=True) if path.is_dir() else None
+    if not top or top.returncode or Path(top.stdout.strip()).resolve() != path:
+        raise ValueError("Path must be the root of a Git repository")
+    data = data_dir().resolve()
+    if path == data or data in path.parents or path in data.parents:
+        raise ValueError("Path overlaps Navis' own data directory")
+    f = config_dir() / "projects" / f"{name}.toml"
+    if f.exists():
+        raise ValueError("A project with this name already exists")
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(f"path = {json.dumps(str(path))}\nprotected = []\n"
+                 "# auto_apply = true  # also write each completed result into this folder (uncommitted)\n\n"
+                 "[checks]\n# Add checks here, e.g. unit = \"python3 -m unittest\".\n"
+                 "# With no checks a finished task is not verified by anything.\n")
+    return f
+
+
+def runner_active():
+    """Whether some process (GUI or `navis run`) is running tasks: it holds the runner lock."""
+    try:
+        with open(data_dir() / "runner.lock", "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
+    except BlockingIOError:
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def attempt_log(aid):
+    return data_dir() / "attempts" / aid / "agent.log"
 
 
 def norm_scope(scope):
@@ -114,38 +192,44 @@ def _which(name):
     return Path(exe).resolve()
 
 
-def fake_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
+def fake_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):
     return ([sandbox.PY, "-m", "navis.fake_agent", prompt],
             {"NAVIS_MCP": json.dumps(mcp), "NAVIS_AGENT_HOME": str(home)}, [])
 
 
-def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
+def add_dirs(dirs):
+    return [a for d in dirs for a in ("--add-dir", d)]
+
+
+def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):
     # Unverified until Phase 1b (D-013).
     exe = _which("codex")
-    argv = [str(exe), "exec", "--json", "--sandbox", "read-only" if readonly else "workspace-write",
+    # --search (live web search) is a top-level flag: it goes before `exec`.
+    argv = [str(exe), *(["--search"] if web else []), "exec", "--json", "--sandbox", "read-only" if readonly else "workspace-write",
             "-c", f"mcp_servers.navis.command={json.dumps(mcp[0])}",
             "-c", f"mcp_servers.navis.args={json.dumps(mcp[1:])}",
             # `exec` never asks, so MCP calls fail ("requires approval") unless pre-approved; only our own tools.
             "-c", 'mcp_servers.navis.default_tools_approval_mode="approve"',
-            *agent_options.flags("codex", model, effort), prompt]
+            *agent_options.flags("codex", model, effort), *add_dirs(dirs), prompt]
     return argv, {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
 
 
-def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):
+def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):
     # Unverified until Phase 1b (D-013). No Bash: commands only through run_check.
     exe = _which("claude")
     cfg = io / "mcp.json"
-    tools = "Read,Glob,Grep" if readonly else "Read,Edit,Write,Glob,Grep"
+    tools = ("Read,Glob,Grep" if readonly else "Read,Edit,Write,Glob,Grep") + (",WebFetch,WebSearch" if web else "")
     cfg.write_text(json.dumps({"mcpServers": {"navis": {"command": mcp[0], "args": mcp[1:]}}}))
     argv = [str(exe), "-p", prompt, "--output-format", "stream-json", "--verbose",
             "--mcp-config", str(cfg), "--strict-mcp-config", "--permission-mode", "acceptEdits",
             "--tools", tools,  # default-deny: the built-in set also has Cron/RemoteTrigger/...
             "--allowedTools", f"{tools},mcp__navis",
-            "--disallowedTools", "Bash,WebFetch,WebSearch,Task", *agent_options.flags("claude", model, effort)]
+            "--disallowedTools", "Bash,Task" + ("" if web else ",WebFetch,WebSearch"),
+            *agent_options.flags("claude", model, effort), *add_dirs(dirs)]  # last: --add-dir takes several values
     return argv, {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
 
 
-def local_cmd(prompt, mcp, home, io, readonly=False, model="", effort=""):  # the local model is set under [local]
+def local_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):  # model: [local]; files: the clone only
     cfg = load_config()["local"]
     env = {"NAVIS_MCP": json.dumps(mcp), "NAVIS_LOCAL_URL": cfg["url"], "NAVIS_LOCAL_MODEL": cfg["model"],
            "NAVIS_LOCAL_MAX_TURNS": str(cfg["max_turns"]), "NAVIS_LOCAL_MAX_TOKENS": str(cfg["max_tokens"]),
@@ -286,6 +370,192 @@ def answer(store, tid, text):
     return store.move(tid, "QUEUED", ("WAITING_INPUT",), note="answered", context_add=f"A: {text}\n")
 
 
+# Chat: an interactive claude/codex in the sandbox, kept alive in tmux. No task, no MCP tools.
+
+def chat_sessions():
+    r = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"], capture_output=True, text=True)
+    return [n for n in r.stdout.split() if n.startswith("navis-chat-")]
+
+
+def chat_name(project, agent, label=""):
+    return f"navis-chat-{project}-{agent}{'-' + label if label else ''}".replace(".", "_")  # tmux rewrites . and :
+
+
+def chat_start(project, agent, label=""):
+    """Start (or find) a chat session; returns the tmux session name. Each label has its own clone,
+    so several chats on one project and agent do not edit the same files."""
+    name = chat_name(project, agent, label)
+    if name in chat_sessions():
+        return name
+    proj, lim = load_project(project), load_config()["limits"]
+    tag = f"{agent}{'-' + label if label else ''}"
+    repo = data_dir() / "chats" / f"{project}-{tag}" / "repo"
+    if not repo.exists():
+        sandbox.clone(proj["path"], repo, "HEAD", f"navis/chat/{tag}")
+        sandbox.overlay(proj["path"], repo)  # your uncommitted work and untracked CLAUDE.md/.claude come along
+    home = data_dir() / "agents" / agent  # the shell's is an empty home of its own
+    home.mkdir(parents=True, exist_ok=True)
+    if agent == "shell":  # a plain bash in the same sandbox: the clone, the rw folders, network; not your home
+        argv, env, extra = ["bash"], {"HOME": str(home)}, []
+    elif agent == "claude":
+        exe = _which(agent)
+        argv, env, extra = [str(exe), *add_dirs(proj["rw"])], {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
+    else:
+        exe = _which(agent)
+        argv, env, extra = ([str(exe), "--sandbox", "workspace-write", *(["--search"] if load_config()["agents"]["web"] else []),
+                             *add_dirs(proj["rw"])], {"CODEX_HOME": str(home)}, [str(exe.parent.parent)])
+    box = sandbox.bwrap(repo, rw=[repo, home, *proj["rw"]], ro=[*proj["objects"], *proj["ro"], *extra],
+                        env={"TERM": "screen-256color", **env})
+    cmd = shlex.join(sandbox.scope(name, lim["agent_memory"], box + argv))
+    subprocess.run(["tmux", "new-session", "-d", "-x", "120", "-y", "40", "-s", name, "-c", str(repo), cmd], check=True)
+    # Where uploads go; no status bar; the wheel scrolls history; the window follows the newest viewer's size.
+    for opt in (["@navis_repo", str(repo)], ["status", "off"], ["mouse", "on"], ["window-size", "latest"]):
+        subprocess.run(["tmux", "set-option", "-t", name, *opt], check=True)
+    return name
+
+
+def chat_close(name):
+    subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+    sandbox.stop_unit(name)  # the agent's cgroup scope carries the session's name
+
+
+def chat_attach(name):
+    """A terminal for the browser: `tmux attach` on a new pty. Returns (process, pty master fd);
+    killing the process detaches only this viewer. setsid -c makes the pty its controlling terminal,
+    so a resize reaches tmux as SIGWINCH."""
+    master, slave = os.openpty()
+    env = {**os.environ, "TERM": "xterm-256color"}
+    env.pop("TMUX", None)
+    try:
+        proc = subprocess.Popen(["setsid", "-c", "tmux", "attach", "-t", name],
+                                stdin=slave, stdout=slave, stderr=slave, env=env)
+    except OSError:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    return proc, master
+
+
+def chat_resize(fd, cols, rows):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", max(2, min(int(rows), 500)), max(2, min(int(cols), 500)), 0, 0))
+
+
+IMAGES = {"image/png": (".png", b"\x89PNG"), "image/jpeg": (".jpg", b"\xff\xd8"), "image/gif": (".gif", b"GIF8"),
+          "image/webp": (".webp", b"RIFF")}
+
+
+def chat_upload(name, ctype, data):
+    """Save an image in the chat's clone and paste its path into the agent's input (not sent), as a terminal
+    paste of a file path does. The file name is generated, never taken from the client."""
+    ext, magic = IMAGES.get(ctype, (None, None))
+    if not ext or not data.startswith(magic):
+        raise ValueError("Send a PNG, JPEG, GIF or WebP image")
+    repo = subprocess.run(["tmux", "show-option", "-v", "-t", name, "@navis_repo"], capture_output=True, text=True).stdout.strip()
+    if not repo or not Path(repo).resolve().is_relative_to((data_dir() / "chats").resolve()):
+        raise ValueError("This chat has no project clone")
+    folder = Path(repo, ".navis-uploads")
+    folder.mkdir(exist_ok=True)
+    exclude = Path(repo, ".git", "info", "exclude")
+    if exclude.exists() and ".navis-uploads/" not in exclude.read_text():
+        exclude.write_text(exclude.read_text().rstrip("\n") + "\n.navis-uploads/\n")
+    path = folder / f"{int(time.time())}-{secrets.token_hex(3)}{ext}"
+    path.write_bytes(data)
+    subprocess.run(["tmux", "set-buffer", "-b", "navis-image", "--", f"{path} "], check=True)
+    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", "navis-image", "-t", name], check=True)
+    return str(path)
+
+
+def ask_options(store, tid):
+    """The choices the agent offered with its pending question (empty when it asked in free text)."""
+    e = store.one("select data from events where task = ? and kind = 'ask' order by id desc limit 1", tid)
+    return json.loads(e["data"]).get("options", []) if e else []
+
+
+def _clip(text, n):
+    text = str(text).strip()
+    return text if len(text) <= n else text[:n] + f" … (+{len(text) - n} chars)"
+
+
+MAIN_ARG = ("file_path", "path", "notebook_path", "pattern", "command", "query", "url", "name")
+
+
+def _call(name, args):
+    """One tool call as a short line: the tool and its main argument, not every parameter."""
+    name = str(name).removeprefix("mcp__navis__")
+    if name == "report_result":
+        return f"■ report: {args.get('status')}: {_clip(args.get('summary', ''), 400)}"
+    if name == "ask_user":
+        opts = args.get("options") or []
+        return f"? asks: {args.get('question')}" + (f" [{' | '.join(map(str, opts))}]" if opts else "")
+    main = next((args[k] for k in MAIN_ARG if isinstance(args.get(k), str)), None)
+    if main is not None:
+        return f"→ {name} {_clip(main, 160)}"
+    return f"→ {name}({_clip(json.dumps(args, ensure_ascii=False), 120)})" if args else f"→ {name}"
+
+
+def format_log_line(line):
+    """One line of an agent's JSON output (claude stream-json or codex --json) as readable text, or None for
+    protocol noise. A line that is not JSON is shown as it is."""
+    line = line.rstrip("\n")
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return line or None
+    if not isinstance(d, dict):
+        return line
+    kind = d.get("type")
+    if kind == "assistant":  # claude
+        out = []
+        for b in (d.get("message") or {}).get("content") or []:
+            if b.get("type") == "text" and b.get("text", "").strip():
+                out.append(b["text"].strip())
+            elif b.get("type") == "tool_use":
+                out.append(_call(b.get("name"), b.get("input") or {}))
+        return "\n".join(out) or None
+    if kind == "user":  # claude: tool results
+        out = []
+        for b in (d.get("message") or {}).get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_result":
+                c = b.get("content")
+                c = "\n".join(x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else c
+                out.append("  ← " + _clip(c or "(no output)", 400).replace("\n", "\n    "))
+        return "\n".join(out) or None
+    if kind == "result":  # claude
+        bits = [f"{k} {d[k]}" for k in ("num_turns", "duration_ms") if k in d]
+        if d.get("total_cost_usd") is not None:
+            bits.append(f"cost ${d['total_cost_usd']:.2f}")
+        return ("✗ " if d.get("is_error") else "■ finished") + (f" ({', '.join(bits)})" if bits else "")
+    if kind in ("item.completed", "item.started") and isinstance(d.get("item"), dict):  # codex
+        it = d["item"]
+        t = it.get("type")
+        if t == "agent_message" and kind == "item.completed":
+            return str(it.get("text", "")).strip() or None
+        if t == "command_execution":
+            if kind == "item.started":
+                return f"→ $ {it.get('command')}"
+            return f"  ← exit {it.get('exit_code')}" + (("\n    " + _clip(it["aggregated_output"], 400).replace("\n", "\n    ")) if it.get("aggregated_output") else "")
+        if t == "file_change" and kind == "item.completed":
+            return "→ changed " + ", ".join(c.get("path", "?") for c in it.get("changes", []))
+        if t == "mcp_tool_call" and kind == "item.started":
+            return _call(it.get("tool"), it.get("arguments") if isinstance(it.get("arguments"), dict) else {})
+        if t == "error":
+            return f"✗ {it.get('message')}"
+        return None
+    if kind == "turn.completed":  # codex
+        u = d.get("usage") or {}
+        return f"■ finished ({u.get('input_tokens', 0)} in, {u.get('output_tokens', 0)} out tokens)"
+    if kind in ("error", "turn.failed"):
+        return "✗ " + _clip(json.dumps(d.get("error") or d.get("message") or d, ensure_ascii=False), 300)
+    return None  # system/hook/init, rate limits, thread.started, turn.started ...
+
+
+def readable_log(text, root=""):
+    """The conversation as text; paths inside the attempt's clone (`root`) are shown relative to it."""
+    out = "\n".join(x for x in map(format_log_line, text.splitlines()) if x)
+    return out.replace(str(root).rstrip("/") + "/", "") if root else out
+
+
 def approve(store, tid):
     return (store.move(tid, "QUEUED", ("WAITING_APPROVAL",), approved=1, note="approved")
             or store.move(tid, "COMPLETED", ("REVIEW",), note="approved by user"))
@@ -320,6 +590,31 @@ def is_paused(store):
 
 def reject(store, tid):
     return store.move(tid, "FAILED", ("REVIEW", "WAITING_APPROVAL"), note="rejected by user")
+
+
+def apply_result(store, tid):
+    """Write a completed task's changes into the project's own folder as uncommitted edits; returns the files.
+    All or nothing: git apply refuses, and writes nothing, when your own edits touch the same lines."""
+    t = store.one("select * from tasks where id = ?", tid)
+    if not t or t["status"] != "COMPLETED" or not t["head"] or t["kind"] == "review":
+        raise ValueError("only a completed task with a result can be applied")
+    path = load_project(t["project"])["path"]
+    patch = subprocess.run(["git", "-C", path, "diff", "--binary", "--no-ext-diff", "--no-textconv", t["base"], t["head"]],
+                           capture_output=True, check=True).stdout
+    if not patch:
+        raise ValueError("this task changed nothing")
+    files = sandbox.changed_files(path, t["base"], t["head"])
+
+    def git_apply(*flags):
+        return subprocess.run(["git", "-C", path, "apply", "--whitespace=nowarn", *flags, "-"], input=patch, capture_output=True)
+    r = git_apply()
+    if r.returncode:
+        if not git_apply("--check", "-R").returncode:
+            raise ValueError("these changes are already in your folder")
+        raise ValueError("does not apply cleanly to your folder (your edits touch the same lines); nothing was written:\n"
+                         + r.stderr.decode(errors="replace").strip()[-500:])
+    store.log(tid, None, "applied", path=path, files=files)
+    return files
 
 
 class Runtime:
@@ -479,7 +774,7 @@ class Runtime:
 
         home = data_dir() / "agents" / t["agent"]
         home.mkdir(parents=True, exist_ok=True)
-        state = {"report": None, "asked": None}
+        state = {"report": None, "asked": None, "options": []}
         sock = io / "navis.sock"
         srv = self._serve(t, aid, proj, repo, ro, sock, state)
         mcp = [sandbox.PY, str(sandbox.PKG / "mcp.py"), str(sock)]
@@ -488,10 +783,13 @@ class Runtime:
         model, effort = agent_options.effective(self.cfg, t["agent"], t["model"], t["effort"])
         s.x("update attempts set model = ?, effort = ? where id = ?", model or None, effort or None, aid)
         s.log(tid, aid, "settings", model=model or "default", effort=effort or "default")
-        argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io, readonly=t["kind"] == "review", model=model, effort=effort)
+        dirs = [] if t["kind"] == "review" else proj["rw"]  # a reviewer writes nothing
+        argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io, readonly=t["kind"] == "review", model=model,
+                                                   effort=effort, web=self.cfg["agents"]["web"], dirs=dirs)
         env["NAVIS_ATTEMPT"] = str(n)
         # io (socket, MCP config) is read-only: connect() still works, replacing them does not.
-        box = sandbox.bwrap(repo, rw=[repo, home], ro=[*ro, str(io), *extra_ro], env=env)
+        # ponytail: tasks of one project may write the same rw folder at once; serialize them if that bites.
+        box = sandbox.bwrap(repo, rw=[repo, home, *dirs], ro=[*ro, str(io), *extra_ro], env=env)
         timed_out = False
         with open(adir / "agent.log", "wb") as log:
             p = subprocess.Popen(sandbox.scope(unit, lim["agent_memory"], box + argv),
@@ -591,6 +889,7 @@ class Runtime:
         elif outcome == "failed":
             s.move(tid, "FAILED", R, head=head, note=summary)
         elif outcome == "asked":
+            s.log(tid, aid, "ask", question=state["asked"], options=state["options"])
             s.move(tid, "WAITING_INPUT", R, head=head, note=state["asked"],
                    context_add=f"Q: {state['asked']}\n")
         elif outcome == "unreported":
@@ -632,8 +931,11 @@ class Runtime:
         flags += [f"protected: {f}" for f in files if any(under(f, p) for p in proj["protected"])]
         if flags:
             self.store.move(t["id"], "REVIEW", ("RUNNING",), head=head, note="; ".join(flags)[:500])
-        else:
-            self.store.move(t["id"], "COMPLETED", ("RUNNING",), head=head, note=summary)
+        elif self.store.move(t["id"], "COMPLETED", ("RUNNING",), head=head, note=summary) and proj["auto_apply"]:
+            try:
+                apply_result(self.store, t["id"])
+            except (ValueError, subprocess.CalledProcessError) as e:
+                self.store.log(t["id"], aid, "apply-error", error=str(e)[:500])
 
     def _check(self, aid, repo, proj, ro, name):
         lim = self.cfg["limits"]
@@ -702,6 +1004,8 @@ class Runtime:
             return True, "recorded; end your turn now"
         if tool == "ask_user":
             state["asked"] = self.redact(str(args.get("question", "")))
+            opts = args.get("options")
+            state["options"] = [self.redact(str(o).strip())[:120] for o in opts if str(o).strip()][:6] if isinstance(opts, list) else []
             return True, "sent to the user; end your turn now"
         if tool == "delegate":
             return self._delegate(t, args)
@@ -774,7 +1078,11 @@ class Runtime:
                  f"Checks you can run with the run_check tool: {', '.join(proj['checks']) or 'none'}."
                  + (f" Your result is verified by: {', '.join(json.loads(t['checks']))}; the others belong to parallel work." if t["checks"] else ""),
                  'When finished, call report_result with status "done" or "failed" and a short summary.',
-                 "If you need a decision from the user, call ask_user and then stop."]
+                 "The task text may be short: read the code to work out what is meant and pick the sensible reading.",
+                 "Call ask_user (pass options when the choices are known) and then stop only when a wrong guess would waste the work."]
+        if proj["rw"]:
+            lines.append(f"You may also edit these folders outside the repository: {', '.join(proj['rw'])}. "
+                         "Changes there take effect at once and are not part of your result commit.")
         if t["parent"] is None:
             lines.append("To hand follow-up work to a later task (it starts after you finish, from your result), call "
                          "delegate(title, spec, scope); scope must stay inside yours.")

@@ -6,16 +6,126 @@ history.replaceState(null, '', location.pathname);
 let snapshot = null, cursor = 0, events = [], view = 'overview', project = 'all', search = '', stateFilter = 'all';
 let connected = false, selectedTask = null, taskDetail = null, detailTab = 'results', detailSignature = '', polling = false, toastTimer;
 let eventTask = 'all', eventType = 'all', eventLimit = 100, confirmPending = false;
+let taskGroup = 'all', lastSyncAt = 0, commandResults = [], commandIndex = 0, clockOffset = 0;
+const ago = s => (s=Math.max(0,Math.round(s)))<60?`${s}s`:s<3600?`${Math.floor(s/60)}m ${String(s%60).padStart(2,'0')}s`:`${Math.floor(s/3600)}h ${String(Math.floor(s%3600/60)).padStart(2,'0')}m`;
+// Running: how long, and how long since the agent last wrote anything; a long silence may be a hang.
+function liveText(task) {
+  const now = Date.now()/1000 + clockOffset, quiet = task.last_output ? now - task.last_output : now - task.running_since;
+  return `running ${ago(now - task.running_since)} · ${task.last_output ? `last output ${ago(quiet)} ago` : 'no output yet'}${quiet > 300 ? ' · quiet for a while: open Agent output to check' : ''}`;
+}
+const live = task => task.running_since ? `<p class="queue-hint live-hint" data-live="${escapeHTML(task.id)}">${escapeHTML(liveText(task))}</p>` : '';
 const columnLimits = [12,12,12,12];
-const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings'};
-const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.'};
+const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings',chat:'Agent chat'};
+const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.',chat:'Claude, Codex or a shell in the sandbox: a real terminal. Select to copy, Ctrl+Shift+V to paste.'};
 const terminal = ['COMPLETED','FAILED','CANCELLED','BLOCKED'];
 const active = ['RUNNING','VERIFY','REVIEW','WAITING_INPUT','WAITING_APPROVAL','CANCELLING'];
+const attentionStates = ['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED','REVIEW'];
+const taskGroups = {all:'All tasks',active:'Active attempts',attention:'Needs attention',completed:'Completed tasks'};
+const matchesTaskGroup = (task, group=taskGroup) => group === 'all' || (group === 'active' ? active.includes(task.state) : group === 'attention' ? attentionStates.includes(task.state) : task.state === 'COMPLETED');
 const shortID = id => (id || 'Not assigned').slice(-6).toUpperCase();
 const badge = state => `<span class="badge ${escapeHTML(state.toLowerCase().replaceAll('_','-'))}">${escapeHTML(state.replaceAll('_',' '))}</span>`;
 const date = t => new Date(t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
 const simulation = () => snapshot?.mode !== 'real';
 const currentTask = () => taskDetail?.task?.id === selectedTask ? taskDetail.task : snapshot?.tasks.find(t => t.id === selectedTask);
+
+function updateSystemChrome() {
+  $('#system-state').textContent = connected ? 'CONNECTED' : 'OFFLINE';
+  $('#system-mode').textContent = snapshot ? (simulation() ? 'SIMULATION MODE' : 'REAL RUNTIME') : 'AWAITING RUNTIME';
+  $('#dispatch-state').textContent = !connected ? 'DISPATCH / OFFLINE' : snapshot.paused ? 'DISPATCH / PAUSED' : 'DISPATCH / ENABLED';
+  $('.shell').classList.toggle('is-offline', !connected);
+  $('.shell').classList.toggle('is-paused', !!snapshot?.paused);
+  updateSystemClock();
+}
+
+function updateSystemClock() {
+  const now = new Date();
+  $('#local-clock').textContent = `LOCAL / ${now.toLocaleTimeString('en-GB', {hour12:false})}`;
+  $('#local-clock').dateTime = now.toISOString();
+  const age = lastSyncAt ? Math.floor((now.getTime()-lastSyncAt)/1000) : null;
+  $('#sync-state').textContent = !connected ? (lastSyncAt ? 'SYNC / OFFLINE' : 'SYNC / WAITING') : age <= 5 ? 'SYNC / LIVE' : `SYNC / ${age}s AGO`;
+  $('#sync-state').title = lastSyncAt ? `Last confirmed snapshot: ${new Date(lastSyncAt).toLocaleString()}` : 'No snapshot received yet';
+}
+
+function navigateView(target) {
+  if (!Object.hasOwn(names,target)) return;
+  view=target; search=''; stateFilter='all'; taskGroup='all'; render();
+}
+function showTaskGroup(group) {
+  if (!Object.hasOwn(taskGroups,group) || !snapshot) return;
+  view='tasks'; taskGroup=group; search=''; stateFilter='all'; render();
+  $('#task-search').focus({preventScroll:true});
+}
+async function openTaskDetail(taskID, openOutput=false) {
+  const summary=snapshot?.tasks.find(t=>t.id===taskID);
+  if (!summary) return;
+  selectedTask=taskID; taskDetail=null;
+  detailTab=openOutput||summary.running_since?'log':summary.state==='REVIEW'?'diff':'results'; detailSignature='';
+  updateDetail(true);
+  if (!$('#detail-dialog').open) $('#detail-dialog').showModal();
+  await loadTaskDetail(taskID);
+}
+function paletteEntries() {
+  const commands=[
+    {kind:'action',id:'new',title:'Create a new task',meta:'NEW DIRECTIVE / Alt N',icon:'+',disabled:!connected},
+    {kind:'action',id:'refresh',title:'Refresh runtime',meta:'SYNC / Reconnect',icon:'↻'},
+    {kind:'action',id:'dispatch',title:snapshot?.paused?'Resume dispatch':'Pause dispatch',meta:'CONTROL / Active attempts continue',icon:'Ⅱ',disabled:!connected},
+    ...Object.entries(names).map(([id,title],index)=>({kind:'view',id,title:`Go to ${title}`,meta:`WORKSPACE / Alt ${index+1}`,icon:'↗',disabled:!snapshot})),
+    {kind:'project',id:'all',title:'All projects',meta:'PROJECT / Clear project filter',icon:'◇',disabled:!snapshot},
+  ];
+  const projects=(snapshot?.projects||[]).map(p=>({kind:'project',id:p.id,title:p.name,meta:'PROJECT / Switch workspace filter',icon:'◇'}));
+  const tasks=(snapshot?.tasks||[]).slice().sort((a,b)=>b.updated_at-a.updated_at).map(t=>({kind:'task',id:t.id,title:t.title,meta:`NAV-${shortID(t.id)} / ${t.state.replaceAll('_',' ')} / ${t.backend}`,keywords:`${t.id} ${t.project_id}`,icon:'▦',disabled:!connected}));
+  return [...commands,...projects,...tasks];
+}
+function paletteMatches(query) {
+  const words=query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return paletteEntries().filter(item=>words.every(word=>`${item.title} ${item.meta} ${item.keywords||''}`.toLowerCase().includes(word))).slice(0,20);
+}
+function selectCommand(index, direction=1, scroll=false) {
+  const count=commandResults.length;
+  commandIndex=count?(index+count)%count:-1;
+  for (let tries=0;tries<count&&commandResults[commandIndex]?.disabled;tries++) commandIndex=(commandIndex+direction+count)%count;
+  document.querySelectorAll('[data-command-index]').forEach((el,i)=>el.setAttribute('aria-selected',String(i===commandIndex&&!commandResults[i].disabled)));
+  const selected=commandResults[commandIndex];
+  if (!selected||selected.disabled) $('#command-search').removeAttribute('aria-activedescendant');
+  else {
+    $('#command-search').setAttribute('aria-activedescendant',`command-option-${commandIndex}`);
+    if (scroll) document.getElementById(`command-option-${commandIndex}`).scrollIntoView({block:'nearest'});
+  }
+}
+function renderCommands(reset=false) {
+  const previous=reset?null:commandResults[commandIndex];
+  commandResults=paletteMatches($('#command-search').value);
+  $('#command-results').innerHTML=commandResults.length?commandResults.map((item,i)=>`<button type="button" id="command-option-${i}" class="command-option" role="option" aria-selected="false" tabindex="-1" data-command-index="${i}" ${item.disabled?'disabled':''}><span class="command-symbol" aria-hidden="true">${item.icon}</span><span class="command-copy"><strong>${escapeHTML(item.title)}</strong><small>${escapeHTML(item.meta)}${item.disabled?' / Unavailable':''}</small></span><span class="command-enter" aria-hidden="true">↵</span></button>`).join(''):'<div class="command-empty">No matches. Try a task title, NAV ID or project name.</div>';
+  $('#command-status').textContent=`${commandResults.length} results${commandResults.length===20?' shown; refine your search for more':''}`;
+  const index=previous?commandResults.findIndex(item=>item.kind===previous.kind&&item.id===previous.id):0;
+  selectCommand(Math.max(0,index));
+}
+function openCommands() {
+  if ($('#command-dialog').open) return;
+  if (document.querySelector('dialog[open]')) return;
+  $('#command-search').value=''; renderCommands(true);
+  $('#command-dialog').showModal(); $('#command-search').focus();
+}
+async function runCommand(index) {
+  const selected=commandResults[index];
+  if (!selected||selected.disabled) return;
+  // Check current capabilities again; the runtime may change while searching.
+  const item=paletteEntries().find(entry=>entry.kind===selected.kind&&entry.id===selected.id);
+  if (!item||item.disabled) {renderCommands();return;}
+  $('#command-dialog').close();
+  if (item.kind==='view') {navigateView(item.id);$('#page-title').focus({preventScroll:true});}
+  else if (item.kind==='project') {project=item.id;eventTask='all';navigateView('tasks');$('#page-title').focus({preventScroll:true});}
+  else if (item.kind==='task') await openTaskDetail(item.id);
+  else if (item.id==='new') openTaskForm();
+  else if (item.id==='refresh') await poll();
+  else if (item.id==='dispatch') $('#pause').click();
+}
+function operatorQueue(tasks) {
+  const requests=tasks.filter(t=>t.pending||['WAITING_INPUT','WAITING_APPROVAL','REVIEW'].includes(t.state)).sort((a,b)=>a.updated_at-b.updated_at);
+  if (!requests.length) return '';
+  const action=t=>t.state==='REVIEW'?'Inspect diff':t.state==='WAITING_INPUT'?'Answer request':'Review request';
+  return `<section class="operator-queue" aria-label="Operator response queue"><div class="panel-header"><div><span class="eyebrow">OPERATOR REQUIRED</span><h2>${requests.length} decision${requests.length===1?'':'s'} waiting</h2></div><button class="text-button" data-task-group="attention">View attention queue ↗</button></div><div class="operator-requests">${requests.slice(0,4).map(t=>`<button id="operator-task-${escapeHTML(t.id)}" class="operator-request" data-task="${escapeHTML(t.id)}"><span class="request-top"><span>NAV-${escapeHTML(shortID(t.id))}</span>${badge(t.state)}</span><strong>${escapeHTML(t.title)}</strong><span class="request-open">${action(t)} <span aria-hidden="true">↗</span></span></button>`).join('')}</div>${requests.length>4?`<small class="operator-more">+ ${requests.length-4} more in the attention queue</small>`:''}</section>`;
+}
 
 function toast(message) {
   $('#toast').textContent = message; $('#toast').hidden = false; $('#announcer').textContent=message;
@@ -26,7 +136,7 @@ async function api(path, body) {
     headers:{...(token ? {Authorization:`Bearer ${token}`} : {}),...(body ? {'Content-Type':'application/json'} : {})},
     ...(body ? {body:JSON.stringify(body)} : {}),signal:AbortSignal.timeout(7000)});
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+  if (!response.ok) throw Object.assign(new Error(result.error || `Request failed (${response.status})`), {status:response.status, login:result.login});
   return result;
 }
 async function command(body) {
@@ -53,12 +163,15 @@ async function poll() {
     const result = await api(`/api/snapshot?cursor=${cursor}`);
     events = [...events,...result.events].slice(-1000); cursor = result.cursor;
     updateAttention(snapshot,result);
-    const changed = !snapshot || !connected || JSON.stringify({...result,events:[],cursor:0,latest_cursor:0}) !== JSON.stringify({...snapshot,events:[],cursor:0,latest_cursor:0});
-    snapshot = result; connected = true;
+    if (result.now) clockOffset = result.now - Date.now()/1000;
+    const changed = !snapshot || !connected || JSON.stringify({...result,events:[],cursor:0,latest_cursor:0,now:0}) !== JSON.stringify({...snapshot,events:[],cursor:0,latest_cursor:0,now:0});
+    snapshot = result; connected = true; lastSyncAt=Date.now(); updateSystemChrome();
+    if ($('#command-dialog').open) renderCommands();
     $('#connection-alert').hidden = true; $('#local-connection').textContent = 'Connected';
     $('#pause').disabled = false; $('#new-task').disabled = false;
     $('#add-project').hidden = false; $('#add-project').disabled = false;
     $('#runtime-banner').classList.toggle('real-mode',!simulation());
+    $('#nav-chat').hidden = simulation();
     $('#runtime-banner').innerHTML = simulation()
       ? '<span class="notice-icon" aria-hidden="true">◌</span><div><strong>Simulation workspace</strong><span>Fake-agent controls only. No repository files are changed.</span></div><span class="notice-badge">SIMULATION / 0.1</span>'
       : '<span class="notice-icon" aria-hidden="true">⌁</span><div><strong>Real runtime</strong><span>Controls and capabilities are provided by the active runner. Verify the task, attempt and diff before approval.</span></div><span class="notice-badge">REAL MODE</span>';
@@ -70,8 +183,9 @@ async function poll() {
     }
     updateCountdowns();
   } catch (err) {
-    connected = false; $('#local-connection').textContent = 'Disconnected';
-    $('#connection-alert').textContent = 'Connection unavailable. Controls are disabled. If Navis restarted, reopen the full launch link from your terminal or ~/.local/state/navis/launch.url.';
+    connected = false; updateSystemChrome(); if ($('#command-dialog').open) renderCommands(); $('#local-connection').textContent = 'Disconnected';
+    if (err.status===401 && err.login && !$('#login-dialog').open) {$('#login-form .form-error').textContent=''; $('#login-dialog').showModal(); $('#login-password').focus();}
+    $('#connection-alert').textContent = err.status===401 ? (err.login ? 'Signed out. Sign in with your Navis password.' : 'Not signed in. Run `navis` on the Navis machine to open it with its launch link.') : 'Connection unavailable. Controls are disabled. If Navis restarted, run `navis` again or reload this page.';
     $('#connection-alert').hidden = false;
     ['#pause','#new-task','#add-project'].forEach(s=>$(s).disabled=true);
     $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
@@ -90,6 +204,7 @@ function countdown(until) {
 function timer(until) {return `<span data-countdown="${Number(until)}">${escapeHTML(countdown(until))}</span>`;}
 function updateCountdowns() {
   document.querySelectorAll('[data-countdown]').forEach(el=>el.textContent = connected ? countdown(Number(el.dataset.countdown)) : 'Disconnected / time unconfirmed');
+  document.querySelectorAll('[data-live]').forEach(el=>{const t=currentTask()?.id===el.dataset.live?currentTask():snapshot?.tasks.find(x=>x.id===el.dataset.live); if (t?.running_since) el.textContent=liveText(t);});
 }
 function queueHint(task) {
   const reasons = task.queue_reasons || [];
@@ -98,24 +213,17 @@ function queueHint(task) {
 }
 function stats(tasks) {
   const running = tasks.filter(t=>active.includes(t.state)).length;
-  const waiting = tasks.filter(t=>['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED'].includes(t.state)).length;
+  const waiting = tasks.filter(t=>attentionStates.includes(t.state)).length;
+  const completed = tasks.filter(t=>t.state==='COMPLETED').length;
   return `<div class="stats">
-    <div class="stat"><div class="stat-top">Total tasks<span aria-hidden="true">▦</span></div><div class="stat-value">${tasks.length}</div><div class="stat-footer">Across ${project==='all'?snapshot.projects.length:1} project${project==='all'&&snapshot.projects.length!==1?'s':''}</div></div>
-    <div class="stat"><div class="stat-top">Active attempts<span aria-hidden="true">◌</span></div><div class="stat-value">${running}</div><div class="stat-footer">${snapshot.paused?'Dispatch paused / active work continues':'See Resources for slot capacity'}</div></div>
-    <div class="stat"><div class="stat-top">Needs attention<span aria-hidden="true">◷</span></div><div class="stat-value">${waiting}</div><div class="stat-footer">${waiting?'Input, approval, cooldown or blocked':'Nothing waiting on you'}</div></div>
-    <div class="stat"><div class="stat-top">Completed<span aria-hidden="true">✓</span></div><div class="stat-value">${tasks.filter(t=>t.state==='COMPLETED').length}</div><div class="stat-footer">${simulation()?'Simulated verification only':'Runtime verification evidence'}</div></div>
+    <button type="button" id="stat-all" class="stat" data-task-group="all" aria-describedby="stat-all-value stat-all-detail" aria-label="Show all tasks"><div class="stat-top">Total tasks<span aria-hidden="true">▦</span></div><div id="stat-all-value" class="stat-value">${tasks.length}</div><div id="stat-all-detail" class="stat-footer">Across ${project==='all'?snapshot.projects.length:1} project${project==='all'&&snapshot.projects.length!==1?'s':''}</div></button>
+    <button type="button" id="stat-active" class="stat" data-task-group="active" aria-describedby="stat-active-value stat-active-detail" aria-label="Show active attempts"><div class="stat-top">Active attempts<span aria-hidden="true">◌</span></div><div id="stat-active-value" class="stat-value">${running}</div><div id="stat-active-detail" class="stat-footer">${snapshot.paused?'Dispatch paused / active work continues':'See Resources for slot capacity'}</div></button>
+    <button type="button" id="stat-attention" class="stat" data-task-group="attention" aria-describedby="stat-attention-value stat-attention-detail" aria-label="Show tasks needing attention"><div class="stat-top">Needs attention<span aria-hidden="true">◷</span></div><div id="stat-attention-value" class="stat-value">${waiting}</div><div id="stat-attention-detail" class="stat-footer">${waiting?'Review, input, cooldown or blocked':'Nothing waiting on you'}</div></button>
+    <button type="button" id="stat-completed" class="stat" data-task-group="completed" aria-describedby="stat-completed-value stat-completed-detail" aria-label="Show completed tasks"><div class="stat-top">Completed<span aria-hidden="true">✓</span></div><div id="stat-completed-value" class="stat-value">${completed}</div><div id="stat-completed-detail" class="stat-footer">${simulation()?'Simulated verification only':'Runtime verification evidence'}</div><progress class="completion-progress" value="${completed}" max="${Math.max(1,tasks.length)}" aria-label="Completed tasks">${completed} / ${tasks.length}</progress></button>
   </div>`;
 }
 function card(task) {
-  return `<button id="card-${escapeHTML(task.id)}" class="task-card" data-task="${escapeHTML(task.id)}"><div class="card-top"><span>NAV-${escapeHTML(shortID(task.id))}</span>${badge(task.state)}</div><h3>${escapeHTML(task.title)}</h3><span class="scope-label">⌁ ${escapeHTML(task.scope.join(', '))}</span>${['QUEUED','WAITING_QUOTA'].includes(task.state)?`<p class="queue-hint">${queueHint(task)}</p>`:''}<div class="card-bottom"><span><span class="agent-avatar" aria-hidden="true">${simulation()?'F':'A'}</span>${escapeHTML(task.backend)}</span><span>${date(task.updated_at)}</span></div></button>`;
-}
-function board(tasks) {
-  const groups = [['Queued',['QUEUED']],['In progress',['RUNNING','VERIFY','REVIEW','CANCELLING']],['Needs attention',['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED']],['Finished',['COMPLETED','FAILED','CANCELLED']]];
-  const visible = tasks.filter(t=>(stateFilter==='all'||t.state===stateFilter)&&`${t.title} ${t.spec} ${t.scope.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
-  return `<div class="board">${groups.map(([name,states],i)=>{
-    const items = visible.filter(t=>states.includes(t.state));
-    return `<section class="column" aria-label="${name}"><div class="column-heading"><span class="column-dot" aria-hidden="true"></span>${name}<span class="column-count">${items.length}</span></div>${items.length?items.slice(0,columnLimits[i]).map(card).join(''):'<div class="empty-column">No tasks here yet</div>'}${items.length>columnLimits[i]?`<button class="column-add" data-more-column="${i}">Show 12 more / ${items.length-columnLimits[i]} remaining</button>`:''}${name==='Queued'?'<button class="column-add" data-new-task>+ Add a task</button>':''}</section>`;
-  }).join('')}</div>`;
+  return `<button id="card-${escapeHTML(task.id)}" class="task-card" data-task="${escapeHTML(task.id)}"><div class="card-top"><span>NAV-${escapeHTML(shortID(task.id))}</span>${badge(task.state)}</div><h3>${escapeHTML(task.title)}</h3><span class="scope-label">⌁ ${escapeHTML(task.scope.join(', '))}</span>${['QUEUED','WAITING_QUOTA'].includes(task.state)?`<p class="queue-hint">${queueHint(task)}</p>`:''}${live(task)}<div class="card-bottom"><span><span class="agent-avatar" aria-hidden="true">${simulation()?'F':'A'}</span>${escapeHTML(task.backend)}</span><span>${date(task.updated_at)}</span></div></button>`;
 }
 function integrationStrip() {
   if (simulation()) return '';
@@ -126,8 +234,16 @@ function integrationStrip() {
     return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.verify_needed&&!i.busy?`<button class="button secondary" data-verify-integration="${escapeHTML(i.project_id)}">Run all checks</button>`:''}${i.review_needed&&!i.busy?`${['claude','codex'].map(a=>`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" data-agent="${a}" ${snapshot.capabilities?.handoff?.[a+'_review']===true?'':`disabled title="${a} is not logged in."`}>Review with ${a==='claude'?'Claude':'Codex'}</button>`).join('')}`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
   }).join('');
 }
+function board(tasks) {
+  const groups = [['Queued',['QUEUED']],['In progress',['RUNNING','VERIFY','REVIEW','CANCELLING']],['Needs attention',['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED']],['Finished',['COMPLETED','FAILED','CANCELLED']]];
+  const visible = tasks.filter(t=>matchesTaskGroup(t)&&(stateFilter==='all'||t.state===stateFilter)&&`${t.title} ${t.spec} ${t.scope.join(' ')}`.toLowerCase().includes(search.toLowerCase()));
+  return `<div class="board">${groups.map(([name,states],i)=>{
+    const items = visible.filter(t=>states.includes(t.state));
+    return `<section class="column" aria-label="${name}"><div class="column-heading"><span class="column-dot" aria-hidden="true"></span>${name}<span class="column-count">${items.length}</span></div>${items.length?items.slice(0,columnLimits[i]).map(card).join(''):'<div class="empty-column">No tasks here yet</div>'}${items.length>columnLimits[i]?`<button class="column-add" data-more-column="${i}">Show 12 more / ${items.length-columnLimits[i]} remaining</button>`:''}${name==='Queued'?'<button class="column-add" data-new-task>+ Add a task</button>':''}</section>`;
+  }).join('')}</div>`;
+}
 function agentRow(name, desc, mark, status, className='', sub='') {
-  return `<div class="agent-row"><span class="provider-mark ${className}" aria-hidden="true">${mark}</span><div class="agent-info"><strong>${name}</strong><small>${desc}</small></div><div class="agent-status ${status==='Ready'?'ready':status==='Cooldown'?'cooldown':''}">${status}<span>${sub}</span></div></div>`;
+  return `<div class="agent-row"><span class="provider-mark ${className}" aria-hidden="true">${mark}</span><div class="agent-info"><strong>${name}</strong><small>${desc}</small></div><div class="agent-status ${['Ready','Busy','Cooldown'].includes(status)?status.toLowerCase():''}">${status}<span>${sub}</span></div></div>`;
 }
 function fakeAgentRow() {
   const busy = snapshot.tasks.some(t=>active.includes(t.state));
@@ -135,8 +251,42 @@ function fakeAgentRow() {
   const until = cooldown.length ? Math.max(...cooldown.map(t=>t.due)) : null;
   return agentRow('Fake agent','In-process simulation / no tools','F',busy?'Busy':cooldown.length?'Cooldown':'Ready','fake',`${busy?'1':'0'} / 1 slots${until?`<br>Task cooldown / ${timer(until)}`:''}`);
 }
+function providerItems() {
+  const marks={fake:'F',codex:'✳',claude:'✽',local:'⌘'};
+  if (!simulation()) return (snapshot.providers||[]).map(p=>({name:p.name||p.id,mark:marks[p.id]||'A',desc:p.capability||'Provider reported by runtime',provider:p}));
+  return [
+    {id:'codex',name:'Codex',mark:'✳',desc:'CLI adapter / feasibility pending'},
+    {id:'claude',name:'Claude Code',mark:'✽',desc:'CLI adapter / feasibility pending'},
+    {id:'local',name:'Local LLM',mark:'⌘',desc:'Context summaries and log analysis'},
+  ].map(item=>({...item,provider:(snapshot.providers||[]).find(p=>p.id===item.id)}));
+}
+function providerRow(item) {
+  const p=item.provider, until=p?.cooldown_until;
+  const reported=p?.status||(simulation()?(item.id==='local'?'Not connected':'Not tested'):'Unavailable');
+  const status=['Ready','Busy','Cooldown','Unavailable','Not tested','Not connected','Error'].includes(reported)?reported:'Unavailable';
+  const slotText=p?.slot_limit!=null?`${p.slots_used??0} / ${p.slot_limit} slots`:p?.reason||(simulation()?'Disabled':'No runtime status');
+  const sub=`${escapeHTML(slotText)}${until?`<br>${timer(Number(until))}`:''}`;
+  return agentRow(escapeHTML(item.name),escapeHTML(item.desc),item.mark,status,p?.id==='fake'?'fake':status.toLowerCase(),sub)+limitBars(p);
+}
+function providerCard(item) {
+  const p=item.provider;
+  return `<section class="panel agent-card">${providerRow(item)}<div class="capability-list"><span class="capability">${escapeHTML(p?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(p?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;
+}
+// What is left of the subscription's 5-hour and weekly windows (the providers report percent used, not tokens).
+function limitBars(p) {
+  const l = p?.limits; if (!l?.windows?.length) return '';
+  const now = Date.now()/1000 + clockOffset;
+  const rows = l.windows.map(w => {
+    const reset = w.resets_at && w.resets_at < now, left = reset ? 100 : Math.max(0, Math.min(100, 100 - w.used));
+    const when = reset ? 'window reset' : w.resets_at ? `resets ${new Date(w.resets_at*1000).toLocaleString([], w.window==='5h'?{hour:'2-digit',minute:'2-digit'}:{weekday:'short',hour:'2-digit',minute:'2-digit'})}` : 'not started';
+    return `<div class="limit-row"><span class="limit-name">${escapeHTML(w.window)}</span><meter min="0" max="100" low="20" high="50" optimum="100" value="${left}" aria-label="${escapeHTML(w.window)} left"></meter><span>${Math.round(left)}% left · ${escapeHTML(when)}</span></div>`;
+  }).join('');
+  const age = now - l.as_of;
+  return `<div class="limits">${rows}<small>${age > 600 ? `as of ${ago(age)} ago · updates when ${escapeHTML(p.name)} runs` : `as of ${ago(age)} ago`}</small></div>`;
+}
 function agentPanel() {
-  return `<section class="panel"><div class="panel-header"><h2>Agent fleet</h2><button class="text-button" data-view="agents">View agents ↗</button></div>${fakeAgentRow()}${agentRow('Codex','CLI adapter / feasibility pending','✳','Not tested','','Disabled')}${agentRow('Claude Code','CLI adapter / feasibility pending','✽','Not tested','','Disabled')}${agentRow('Local LLM','Context summaries and log analysis','⌘','Not connected','','No write / exec tools')}</section>`;
+  const rows=providerItems().map(providerRow).join('');
+  return `<section class="panel"><div class="panel-header"><h2>Agent fleet</h2><button class="text-button" data-view="agents">View agents ↗</button></div>${simulation()?fakeAgentRow():''}${rows||empty('No providers reported','Provider status appears when the runtime supplies it.')}</section>`;
 }
 function eventList(limit=8, taskFilter='all', typeFilter='all', sourceEvents=events) {
   const relevant = sourceEvents.filter(e=>(project==='all'||e.project_id===project)&&(taskFilter==='all'||e.task_id===taskFilter)&&(typeFilter==='all'||e.type===typeFilter)).slice(-limit).reverse();
@@ -155,8 +305,12 @@ async function loadTaskDetail(taskID) {
 function eventToolbar(tasks) {
   return `<div class="event-toolbar"><label>Task<select id="event-task"><option value="all">All tasks and runtime</option>${tasks.map(t=>`<option value="${escapeHTML(t.id)}" ${eventTask===t.id?'selected':''}>${escapeHTML(t.title)}</option>`).join('')}</select></label><label>Event type<select id="event-type"><option value="all">All event types</option>${[...new Set(events.map(e=>e.type))].sort().map(type=>`<option ${eventType===type?'selected':''}>${escapeHTML(type)}</option>`).join('')}</select></label></div>`;
 }
+// The readable agent log: what the agent said stands out, tool calls are one line each, their output is dimmed.
+const logLine = line => `<span class="${/^(→|\?)/.test(line)?'log-tool':/^(■|✗)/.test(line)?'log-status':/^ {2}/.test(line)?'log-result':'log-text'}">${escapeHTML(line)}</span>`;
 function artifactBlock(artifact, task, expanded=false) {
-  return `<details ${expanded?'open':''}><summary>${escapeHTML(artifact.name)} / ${artifact.simulated?'SIMULATED':'RUNTIME EVIDENCE'}</summary><small>Attempt ${escapeHTML(artifact.attempt_id)} / SHA-256 ${escapeHTML(artifact.hash||'not supplied')}</small><pre>${escapeHTML(artifact.content)}</pre><button class="text-button" data-copy-artifact="${escapeHTML(artifact.id)}" data-copy-task="${escapeHTML(task.id)}">Copy full result</button></details>`;
+  const conversation = artifact.kind==='agent_log' && !String(artifact.id).startsWith('agent_log_raw');
+  const body = conversation ? `<pre class="conversation">${String(artifact.content??'').split('\n').map(logLine).join('\n')}</pre>` : `<pre>${escapeHTML(artifact.content)}</pre>`;
+  return `<details ${expanded&&!String(artifact.id).startsWith('agent_log_raw')?'open':''}><summary>${escapeHTML(artifact.name)} / ${artifact.simulated?'SIMULATED':'RUNTIME EVIDENCE'}</summary><small>Attempt ${escapeHTML(artifact.attempt_id)} / SHA-256 ${escapeHTML(artifact.hash||'not supplied')}</small>${body}<button class="text-button" data-copy-artifact="${escapeHTML(artifact.id)}" data-copy-task="${escapeHTML(task.id)}">Copy full result</button></details>`;
 }
 function artifacts(tasks) {
   const items = tasks.flatMap(t=>t.artifacts.map(a=>({artifact:a,task:t})));
@@ -207,6 +361,7 @@ function restoreFocus(saved) {
 function render() {
   if (!snapshot) return;
   const focus = rememberFocus();
+  $('#command-masthead').hidden = view !== 'overview';
   $('#page-title').textContent = names[view]; $('#page-subtitle').textContent = subtitles[view]; $('#view-label').textContent = view==='overview'?'Overview':names[view];
   document.querySelectorAll('.sidebar .nav-item').forEach(b=>{b.classList.toggle('active',b.dataset.view===view);if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});
   $('#pause').textContent = snapshot.paused?'▷ Resume dispatch':'Ⅱ Pause dispatch';
@@ -217,21 +372,23 @@ function render() {
   if (view==='overview'||view==='tasks') {
     html = stats(tasks);
     html += integrationStrip();
-    const pending = tasks.filter(t=>t.pending);
-    if (pending.length) html += `<div class="attention-strip"><span aria-hidden="true">◷</span><span>${pending.length} task${pending.length===1?'':'s'} waiting for your response</span><button class="text-button" data-task="${escapeHTML(pending[0].id)}">Review request →</button></div>`;
+    html += operatorQueue(tasks);
     html += `<div class="section-title"><h2>Task board <small>${project==='all'?'All projects':escapeHTML(snapshot.projects.find(p=>p.id===project)?.name)}</small></h2><button class="text-button" data-new-task>+ Create task</button></div>`;
-    if (view==='tasks') html += `<div class="board-toolbar"><input id="task-search" placeholder="Search tasks…" aria-label="Search tasks" value="${escapeHTML(search)}"><select id="state-filter" aria-label="Filter by state"><option value="all">All states</option>${[...new Set(snapshot.tasks.map(t=>t.state))].sort().map(s=>`<option ${s===stateFilter?'selected':''}>${escapeHTML(s)}</option>`).join('')}</select></div>`;
+    if (view==='tasks') html += `<div class="board-toolbar"><input id="task-search" placeholder="Search tasks…" aria-label="Search tasks" value="${escapeHTML(search)}"><select id="group-filter" aria-label="Filter task group">${Object.entries(taskGroups).map(([id,label])=>`<option value="${id}" ${taskGroup===id?'selected':''}>${label}</option>`).join('')}</select><select id="state-filter" aria-label="Filter by state"><option value="all">All states</option>${[...new Set(snapshot.tasks.map(t=>t.state))].sort().map(s=>`<option ${s===stateFilter?'selected':''}>${escapeHTML(s)}</option>`).join('')}</select></div>`;
     html += board(tasks);
     if (view==='overview') html += `<div class="lower-grid">${agentPanel()}<section class="panel"><div class="panel-header"><h2>Recent activity</h2><button class="text-button" data-view="activity">View audit log ↗</button></div>${eventList()}</section></div>`;
   } else if (view==='agents') {
-    const providers=snapshot.providers||[];
-    const providerCard=([name,mark,desc],provider)=>{const until=provider?.cooldown_until;const reported=provider?.status||(until?'Cooldown':'Unavailable');const state=['Ready','Busy','Cooldown','Unavailable','Not tested','Not connected','Error'].includes(reported)?reported:'Unavailable';const slotText=provider?.slot_limit!=null?`${provider.slots_used||0} / ${provider.slot_limit} slots`:provider?.reason||'No runtime status';const sub=`${escapeHTML(slotText)}${until?`<br>${timer(Number(until))}`:''}`;return `<section class="panel agent-card">${agentRow(name,desc,mark,state,state==='Ready'?'ready':state==='Cooldown'?'cooldown':'',sub)}<div class="capability-list"><span class="capability">${escapeHTML(provider?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(provider?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;};
-    html = `<div class="agent-grid"><section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>${[['Codex','✳','Provider CLI/session'],['Claude Code','✽','Provider CLI/session'],['Local LLM','⌘','Text summaries and log analysis']].map((entry,i)=>{const key=['codex','claude','local'][i], provider=providers.find(p=>p.id===key||p.name?.toLowerCase().replace(/ code/,'').replace(/ llm/,'')===entry[0].toLowerCase());return providerCard(entry,provider);}).join('')}</div>`;
+    const fakeCard=simulation()?`<section class="panel agent-card">${fakeAgentRow()}<div class="capability-list"><span class="capability">Lifecycle simulation</span><span class="capability">Task cooldown</span><span class="capability">Source artifact references</span></div><p>Controls run in-process. A task cooldown releases the slot; it does not imply the whole fake provider is blocked.</p></section>`:'';
+    const cards=providerItems().map(providerCard).join('');
+    html = `<div class="agent-grid">${fakeCard}${cards||`<section class="panel">${empty('No providers reported','Provider status appears when the runtime supplies it.')}</section>`}</div>`;
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
   else if (view==='artifacts') html = artifacts(tasks);
+  else if (view==='chat') {if ($('#chat-root')) return; html = chatPanel(); chatDisconnect(); chatSession='';}
   else if (view==='resources') html = resourcePanel()+usagePanel();
   else html = settingsPanel();
+  if (view!=='chat') chatDisconnect();
   $('#content').innerHTML = html; restoreFocus(focus); updateAttention(null,snapshot); updateCountdowns();
+  if (view==='chat') chatTick();
 }
 function populateSources(selected='') {
   const projectID = $('#task-project').value;
@@ -294,6 +451,8 @@ function updateDetail(force=false) {
   const focus = rememberFocus();
   const saved = {}; $('#task-detail').querySelectorAll('textarea').forEach(el=>saved[el.name]=el.value);
   const disclosureState = [...$('#task-detail').querySelectorAll('details')].map(el=>el.open);
+  const pres = [...$('#task-detail').querySelectorAll('pre')].map(el=>el.scrollHeight-el.scrollTop-el.clientHeight<40 ? -1 : el.scrollTop);
+  const dialogTop = $('#detail-dialog').scrollTop;
   detailSignature = signature;
   const controls = [];
   const gracefulStop=simulation()||snapshot.capabilities?.controls?.graceful_stop===true;
@@ -312,12 +471,13 @@ function updateDetail(force=false) {
     controls.push(`<button class="button secondary" data-action="review_with_codex" ${handoff.codex_review===true?'':'disabled title="Codex is not logged in."'}>Review with Codex</button>`);
     controls.push(`<button class="button secondary" data-action="continue_with_claude" ${handoff.claude_continue===true?'':'disabled title="Claude is not logged in."'}>Continue with Claude</button>`);
   }
-  if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="apply" title="Write these changes into your project folder as uncommitted edits. Nothing is written if your own edits touch the same lines.">Apply to my folder</button>');
   if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
   const latestReview = (task.reviews||[])[0];
   if (!simulation()&&task.state==='COMPLETED'&&task.kind!=='review'&&latestReview&&latestReview.verdict==='changes'&&!latestReview.stale) controls.push('<button class="button primary" data-action="revise" title="Queue a bounded follow-up round that starts from this result and carries the reviewer findings.">Revise from review</button>');
   let request = '';
-  if (task.pending) request = `<section class="request-box"><h3>${task.state==='WAITING_APPROVAL'?'Approval required':'Your input is needed'}</h3><p>${escapeHTML(task.pending.message)}</p><small>Expires at ${date(task.pending.expires)} / bound to the displayed attempt</small>${task.state==='WAITING_APPROVAL'?`<div class="detail-actions"><button class="button primary" data-action="approve">${simulation()?'Approve simulation':'Approve request'}</button><button class="button danger" data-action="reject">Reject</button></div>`:'<form id="answer-form"><label>Your answer<textarea id="task-answer" name="answer" required maxlength="2000" rows="2"></textarea></label><button class="button primary" type="submit">Send answer →</button></form>'}</section>`;
+  if (task.pending) request = `<section class="request-box"><h3>${task.state==='WAITING_APPROVAL'?'Approval required':'Your input is needed'}</h3><p>${escapeHTML(task.pending.message)}</p><small>Expires at ${date(task.pending.expires)} / bound to the displayed attempt</small>${task.state==='WAITING_APPROVAL'?`<div class="detail-actions"><button class="button primary" data-action="approve">${simulation()?'Approve simulation':'Approve request'}</button><button class="button danger" data-action="reject">Reject</button></div>`:`${(task.pending.options||[]).length?`<div class="answer-options" role="group" aria-label="Choose an answer">${task.pending.options.map((o,i)=>`<button type="button" class="button secondary" data-answer-option="${i}">${escapeHTML(o)}</button>`).join('')}</div><p class="field-help">Or write your own answer:</p>`:''}<form id="answer-form"><label>Your answer<textarea id="task-answer" name="answer" required maxlength="2000" rows="2"></textarea></label><button class="button primary" type="submit">Send answer →</button></form>`}</section>`;
   else if (task.state==='REVIEW') request = `<section class="request-box"><h3>Approve reviewed attempt</h3><p>The runner has not supplied a separate approval question. Review the diff and verification evidence above before approving.</p><div class="detail-actions"><button class="button primary" data-action="approve">Approve attempt</button><button class="button danger" data-action="reject">Reject attempt</button></div></section>`;
   else if (task.state==='WAITING_INPUT') request = `<section class="request-box"><h3>Waiting for your input</h3><p>The runtime has not supplied the input prompt yet. Refresh the task details or inspect its event output.</p><button class="text-button" data-open-output data-task="${escapeHTML(task.id)}">Open task output ↗</button></section>`;
   const reviewItems = (task.reviews||[]).map(r=>`<li><strong>${r.verdict==='approve'?'Approved':'Changes requested'}</strong> by ${escapeHTML(r.reviewer)}${r.reviewer===r.implementer?' (same agent as the implementer)':''}${r.stale?' / reviewed an older result, not this commit':''}<br><span class="muted">${String(r.summary||'').split('\n').map(escapeHTML).join('<br>')}</span></li>`).join('');
@@ -325,9 +485,11 @@ function updateDetail(force=false) {
   const reasons = task.queue_reasons || [];
   const tabLabels=[['results','Results'],['diff','Code diff'],['log','Agent output'],['prompt','Prompt / instructions'],['attempts','Attempts']];
   const activeLabel=tabLabels.find(([id])=>id===detailTab)?.[1]||'Results';
-  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${task.checks?`<div><span>Verified by</span>${escapeHTML(task.checks.join(', '))}</div>`:''}${task.after?`<div><span>Starts after</span>task ${escapeHTML(task.after)}</div>`:''}${(snapshot.agent_options||{})[task.backend]?`<div><span>Model / effort</span>${escapeHTML(task.model||'default')} / ${escapeHTML(task.effort||'default')}</div>`:''}${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}${reviewBlock}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
+  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${task.checks?`<div><span>Verified by</span>${escapeHTML(task.checks.join(', '))}</div>`:''}${task.after?`<div><span>Starts after</span>task ${escapeHTML(task.after)}</div>`:''}${(snapshot.agent_options||{})[task.backend]?`<div><span>Model / effort</span>${escapeHTML(task.model||'default')} / ${escapeHTML(task.effort||'default')}</div>`:''}${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${live(task)}${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}${reviewBlock}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
   $('#task-detail').querySelectorAll('textarea').forEach(el=>{if(saved[el.name])el.value=saved[el.name];});
   if (!force) $('#task-detail').querySelectorAll('details').forEach((el,i)=>{if(i<disclosureState.length)el.open=disclosureState[i];});
+  if (!force) {$('#detail-dialog').scrollTop = dialogTop; $('#task-detail').querySelectorAll('pre').forEach((el,i)=>{if (i<pres.length) el.scrollTop = pres[i]<0 ? el.scrollHeight : pres[i];});}
+  else if (detailTab==='log') $('#task-detail').querySelectorAll('pre.conversation').forEach(el=>el.scrollTop=el.scrollHeight);
   if (!connected) $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
   restoreFocus(focus); updateCountdowns();
 }
@@ -359,27 +521,30 @@ async function copyText(text) {
 }
 document.addEventListener('click',async e=>{
   const close = e.target.closest('[data-close]'); if (close) {document.getElementById(close.dataset.close).close();return;}
-  const nav = e.target.closest('[data-view]'); if (nav) {view=nav.dataset.view;search='';stateFilter='all';render();return;}
+  const chatKey=e.target.closest('[data-chat-key]'); if (chatKey) {if (chatSocket?.readyState===1) chatSocket.send(JSON.stringify({data:chatKeys[Number(chatKey.dataset.chatKey)][0]})); chatTerm?.focus(); return;}
+  const chatTab=e.target.closest('[data-chat-tab]'); if (chatTab) {chatConnect(chatTab.dataset.chatTab).then(chatTick);return;}
+  const chatX=e.target.closest('[data-chat-close]'); if (chatX) {
+    if (confirm(`Close chat ${chatTitle(chatX.dataset.chatClose)}? The agent stops; its project clone is kept.`)) {try {await chatApi({action:'chat_close',session:chatX.dataset.chatClose}); chatTick();} catch (err) {toast(err.message);}}
+    return;
+  }
+  if (e.target.closest('#chat-attach')) {$('#chat-image').click();return;}
+  const paletteOption=e.target.closest('[data-command-index]'); if (paletteOption) {await runCommand(Number(paletteOption.dataset.commandIndex));return;}
+  const stat=e.target.closest('[data-task-group]'); if (stat) {showTaskGroup(stat.dataset.taskGroup);return;}
+  const nav = e.target.closest('[data-view]'); if (nav) {navigateView(nav.dataset.view);return;}
   const proj = e.target.closest('[data-project]'); if (proj) {project=proj.dataset.project;eventTask='all';render();return;}
   const more = e.target.closest('[data-more-column]'); if (more) {columnLimits[Number(more.dataset.moreColumn)]+=12;render();return;}
   if (e.target.closest('#more-events')) {eventLimit=Math.min(1000,eventLimit+100);render();return;}
   const tab = e.target.closest('[data-detail-tab]'); if (tab) {detailTab=tab.dataset.detailTab;updateDetail(true);return;}
   const copy = e.target.closest('[data-copy-artifact]'); if (copy) {const task=taskDetail?.task?.id===copy.dataset.copyTask?taskDetail.task:snapshot.tasks.find(t=>t.id===copy.dataset.copyTask);const artifact=task?.artifacts.find(a=>a.id===copy.dataset.copyArtifact);if(artifact?.content!==undefined)await copyText(artifact.content);return;}
   if(e.target.closest('[data-copy-merge]')) {const task=currentTask();if(task&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..'))await copyText(`git merge -- ${task.result_ref}`);return;}
+  const opt = e.target.closest('[data-answer-option]'); if (opt) {
+    const task=currentTask(), text=task?.pending?.options?.[Number(opt.dataset.answerOption)]; if (!task||!connected||text===undefined) return;
+    opt.disabled=true; const result=await taskCommand('answer',{text,pending_id:task.pending.id});
+    if (result) toast('Answer sent.'); opt.disabled=false; return;
+  }
   const follow = e.target.closest('[data-continue]'); if (follow) {const source=snapshot.tasks.find(t=>t.id===follow.dataset.continue);if(connected&&source){$('#detail-dialog').close();openTaskForm(source);}return;}
   if (e.target.closest('[data-new-task]')||e.target.closest('#new-task')) {if(connected)openTaskForm();return;}
-  const taskButton = e.target.closest('[data-task]'); if (taskButton) {selectedTask=taskButton.dataset.task;taskDetail=null;const summary=snapshot.tasks.find(t=>t.id===selectedTask);detailTab=taskButton.hasAttribute('data-open-output')?'log':summary?.state==='REVIEW'?'diff':'results';detailSignature='';updateDetail(true);if(!$('#detail-dialog').open)$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);return;}
-  const control = e.target.closest('[data-action]');
-  if (control) {
-    const task = currentTask(); if (!task||!connected) return;
-    const action = control.dataset.action;
-    const captured = {task_id:task.id,attempt_id:task.attempt_id,pending_id:task.pending?.id};
-    if (['stop','kill'].includes(action)&&!await confirmControl(action,task)) return;
-    control.disabled = true;
-    const result = await command({action,...captured});
-    if (result) toast(result.message||(result.task_id&&action==='revise'?(result.duplicate?'That revision is already queued.':`Revision queued as task ${result.task_id}.`):result.expired?'Request expired; task blocked.':'Control accepted by runtime.'));
-    control.disabled = false;
-  }
+  const taskButton = e.target.closest('[data-task]'); if (taskButton) {await openTaskDetail(taskButton.dataset.task,taskButton.hasAttribute('data-open-output'));return;}
   const promo = e.target.closest('[data-promote]'); if (promo) {
     if (!connected||promo.disabled) return;
     const i=(snapshot.integration||[]).find(x=>x.project_id===promo.dataset.promote); if (!i) return;
@@ -412,6 +577,18 @@ document.addEventListener('click',async e=>{
     if (result) toast(result.duplicate?'A matching review is already queued.':'Review queued; the verdict appears here when it finishes.');
     reviewInt.disabled=false; return;
   }
+  const control = e.target.closest('[data-action]');
+  if (control) {
+    const task = currentTask(); if (!task||!connected) return;
+    const action = control.dataset.action;
+    const captured = {task_id:task.id,attempt_id:task.attempt_id,pending_id:task.pending?.id};
+    if (['stop','kill'].includes(action)&&!await confirmControl(action,task)) return;
+    if (action==='apply'&&!confirm(`Write the changes of “${task.title}” into ${snapshot.projects.find(p=>p.id===task.project_id)?.path||'the project folder'}? They arrive as uncommitted edits; nothing is written if your own edits touch the same lines.`)) return;
+    control.disabled = true;
+    const result = await command({action,...captured});
+    if (result) toast(result.message||(result.task_id&&action==='revise'?(result.duplicate?'That revision is already queued.':`Revision queued as task ${result.task_id}.`):result.expired?'Request expired; task blocked.':'Control accepted by runtime.'));
+    control.disabled = false;
+  }
 });
 $('#detail-dialog').addEventListener('close',()=>{selectedTask=null;taskDetail=null;detailSignature='';});
 $('#add-project').onclick = ()=>{if(!connected)return;$('#project-form').reset();$('#project-form .form-error').textContent='';$('#project-description').textContent=simulation()?'Creates a simulation-only project.':'Add a project through the active runtime. Repository access is granted only by that runtime.';$('#project-path-field').hidden=simulation();$('#project-dialog').showModal();};
@@ -429,8 +606,9 @@ $('#task-form').onsubmit = async e=>{
   const form=e.currentTarget, button=form.querySelector('[type="submit"]');button.disabled=true;
   const fields=Object.fromEntries(new FormData(form));
   delete fields.checks; const ticked=[...form.querySelectorAll('input[name="checks"]:checked')].map(i=>i.value); if(ticked.length)fields.checks=ticked;
+  fields.title=(fields.title||'').trim()||(fields.spec||'').trim().split('\n')[0].slice(0,120); fields.scope=(fields.scope||'').trim()||'.';
   if(fields.source_task_id)fields.source_attempt_id=$('#task-source').selectedOptions[0]?.dataset.attempt;
-  try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':simulation()?'Task queued for simulation.':'Task queued.');selectedTask=result.task_id;taskDetail=null;detailTab='results';updateDetail(true);$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);}
+  try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':simulation()?'Task queued for simulation.':'Task queued.');selectedTask=result.task_id;taskDetail=null;detailTab=simulation()?'results':'log';updateDetail(true);$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);}
   catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}
 };
 $('#project-form').onsubmit = async e=>{
@@ -463,7 +641,8 @@ $('#task-detail').addEventListener('submit',async e=>{
 });
 $('#content').addEventListener('input',e=>{if(e.target.id==='task-search'){search=e.target.value;render();}});
 $('#content').addEventListener('change',e=>{
-  if(e.target.id==='state-filter')stateFilter=e.target.value;
+  if(e.target.id==='group-filter')taskGroup=e.target.value;
+  else if(e.target.id==='state-filter')stateFilter=e.target.value;
   else if(e.target.id==='event-task')eventTask=e.target.value;
   else if(e.target.id==='event-type')eventType=e.target.value;
   else return;render();
@@ -474,8 +653,114 @@ $('#task-detail').addEventListener('keydown',e=>{
   const next=e.key==='Home'?0:e.key==='End'?tabs.length-1:(index+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
   e.preventDefault();tabs[next].focus();tabs[next].click();
 });
+$('#open-command').onclick=()=>openCommands();
+$('#command-search').addEventListener('input',()=>renderCommands(true));
+$('#command-search').addEventListener('keydown',e=>{
+  if (e.key==='ArrowDown'||e.key==='ArrowUp') {e.preventDefault();selectCommand(commandIndex+(e.key==='ArrowDown'?1:-1),e.key==='ArrowDown'?1:-1,true);}
+  else if (e.key==='Enter') {e.preventDefault();runCommand(commandIndex);}
+});
+document.addEventListener('keydown',e=>{
+  if (e.repeat) return;
+  if ((e.ctrlKey||e.metaKey)&&!e.altKey&&e.key.toLowerCase()==='k') {
+    if ($('#command-dialog').open) {e.preventDefault();$('#command-dialog').close();}
+    else if (!document.querySelector('dialog[open]')) {e.preventDefault();openCommands();}
+    return;
+  }
+  if (!e.altKey||e.ctrlKey||e.metaKey||e.shiftKey||document.querySelector('dialog[open]')||e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key.toLowerCase()==='n'&&connected) {e.preventDefault();openTaskForm();}
+  else if (/^[1-7]$/.test(e.key)&&snapshot) {e.preventDefault();navigateView(Object.keys(names)[Number(e.key)-1]);$('#page-title').focus({preventScroll:true});}
+});
+
+// Chat: a real terminal (xterm.js, loaded on first use) on the agent's tmux session over a WebSocket.
+let chatSession = '', chatTerm = null, chatFit = null, chatSocket = null, chatLoading = null;
+// For phones and keys the browser keeps: each button types its terminal sequence.
+const chatKeys = [['\x1b','Esc'],['\t','Tab'],['\x1b[Z','⇧Tab'],['\x1b[A','↑'],['\x1b[B','↓'],['\x1b[D','←'],['\x1b[C','→'],['\r','Enter'],['\n','New line'],['\x03','Ctrl-C'],['\x04','Ctrl-D']];
+const chatApi = body => api('/api/command', body);
+function chatPanel() {
+  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="shell">Shell (bash in the sandbox)</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><div id="chat-term" class="chat-term" aria-label="Agent terminal. Typing here goes to the agent.">Start a chat, or pick a running one.</div><div class="chat-bar chat-keys">${chatKeys.map(([,l],i)=>`<button class="button secondary" type="button" data-chat-key="${i}">${l}</button>`).join('')}<button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><p class="muted chat-hint">Click the terminal and type, as in any terminal. Drag to select = copy; Ctrl+Shift+V = paste; the wheel scrolls back. Paste or drop an image to attach it. Each chat runs in its own sandboxed clone of the project; your checkout is never touched. From a terminal: <code>navis chat</code>.</p></section>`;
+}
+const chatTitle = n => n.replace(/^navis-chat-/, '');
+function chatTabs(sessions) {
+  const sig = sessions.join('|') + '#' + chatSession, tabs = $('#chat-tabs');
+  if (!tabs || tabs.dataset.sig === sig) return;
+  tabs.dataset.sig = sig;
+  tabs.innerHTML = sessions.map(n=>`<span class="chat-tab ${n===chatSession?'active':''}"><button type="button" role="tab" aria-selected="${n===chatSession}" data-chat-tab="${escapeHTML(n)}">${escapeHTML(chatTitle(n))}</button><button type="button" data-chat-close="${escapeHTML(n)}" aria-label="Close chat ${escapeHTML(chatTitle(n))}">×</button></span>`).join('') || '<span class="muted">No chats running.</span>';
+}
+async function chatTick() {
+  if (view!=='chat'||!$('#chat-root')) return;
+  try {
+    const {sessions} = await chatApi({action:'chat_list'});
+    if (!sessions.includes(chatSession) || !chatSocket) chatConnect(sessions.includes(chatSession) ? chatSession : sessions[0] || '');
+    chatTabs(sessions);
+  } catch (err) {toast(err.message);}
+}
+function loadScript(src) {
+  return new Promise((ok, fail) => {const s=document.createElement('script'); s.src=src; s.onload=ok; s.onerror=()=>fail(new Error(`Could not load ${src}`)); document.head.append(s);});
+}
+function chatDisconnect() {const ws=chatSocket; chatSocket=null; ws?.close(); chatTerm?.dispose(); chatTerm=null;}
+async function chatConnect(name) {
+  const box = $('#chat-term'); if (!box) return;
+  if (name === chatSession && chatSocket) return;
+  chatDisconnect(); chatSession = name;
+  if (!name) {box.textContent = 'Start a chat, or pick a running one.'; return;}
+  try {
+    chatLoading ||= (async()=>{const l=document.createElement('link'); l.rel='stylesheet'; l.href='/xterm.css'; document.head.append(l); await loadScript('/xterm.js'); await loadScript('/addon-fit.js');})();
+    await chatLoading;
+  } catch (err) {chatLoading=null; box.textContent=err.message; return;}
+  if (chatSession !== name || chatSocket) return;  // switched again while loading
+  box.textContent = '';
+  const term = chatTerm = new Terminal({fontSize:13, cursorBlink:true, scrollback:0, macOptionIsMeta:true, fontFamily:'ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace', theme:{background:'#050505', foreground:'#e6e6e6', cursor:'#ff3b3b', selectionBackground:'#ff3b3b55'}});
+  chatFit = new FitAddon.FitAddon(); term.loadAddon(chatFit); term.open(box); chatFit.fit();
+  // tmux sends what you select with the mouse as OSC 52; put it on the system clipboard like a desktop terminal.
+  term.parser.registerOscHandler(52, data => {
+    const b64 = data.slice(data.indexOf(';') + 1);
+    if (b64 && b64 !== '?') try {navigator.clipboard?.writeText(new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)))).catch(()=>{});} catch (_) {/* not base64 */}
+    return true;
+  });
+  new ResizeObserver(()=>{if (chatTerm===term) chatFit.fit();}).observe(box);
+  const ws = chatSocket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/chat/ws?session=${encodeURIComponent(name)}`);
+  ws.binaryType = 'arraybuffer';
+  const send = msg => {if (ws.readyState===1) ws.send(JSON.stringify(msg));};
+  term.onData(data=>send({data}));
+  term.onResize(({cols,rows})=>send({resize:[cols,rows]}));
+  ws.onopen = () => {send({resize:[term.cols,term.rows]}); term.focus();};
+  ws.onmessage = e => term.write(new Uint8Array(e.data));
+  ws.onclose = () => {if (chatSocket===ws) {chatSocket=null; term.write('\r\n\x1b[2m[disconnected; reconnecting…]\x1b[0m\r\n'); setTimeout(chatTick, 1000);}};
+}
+async function chatUpload(file) {
+  if (!chatSession) {toast('Start or pick a chat first.'); return;}
+  if (!file || !file.type.startsWith('image/')) return;
+  if (file.size > 8_000_000) {toast('The image is larger than 8 MB.'); return;}
+  try {
+    const response = await fetch('/api/chat/upload?session=' + encodeURIComponent(chatSession), {method:'POST', credentials:'same-origin', headers:{'Content-Type':file.type}, body:file});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Upload failed');
+    toast('Image attached. Add your question and press Enter.'); chatTerm?.focus();
+  } catch (err) {toast(err.message);}
+}
+$('#content').addEventListener('submit', async e => {
+  if (e.target.id!=='chat-start') return;
+  e.preventDefault(); const button=e.target.querySelector('[type="submit"]'); button.disabled=true; toast('Starting chat… the first start clones the project.');
+  try {const {session}=await chatApi({action:'chat_start',...Object.fromEntries(new FormData(e.target))}); $('#chat-tabs').dataset.sig=''; await chatConnect(session); chatTick();}
+  catch (err) {toast(err.message);} finally {button.disabled=false;}
+});
+$('#content').addEventListener('change', e => {if (e.target.id==='chat-image') {chatUpload(e.target.files[0]); e.target.value='';}});
+$('#content').addEventListener('paste', e => {
+  const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));
+  if (f && e.target.closest('#chat-term')) {e.preventDefault(); e.stopPropagation(); chatUpload(f);}
+}, true);
+$('#content').addEventListener('dragover', e => {if (e.target.closest('#chat-term')) e.preventDefault();});
+$('#content').addEventListener('drop', e => {if (e.target.closest('#chat-term')) {e.preventDefault(); chatUpload([...e.dataTransfer.files].find(x=>x.type.startsWith('image/')));}});
+setInterval(chatTick, 3000);
+$('#login-form').onsubmit = async e=>{
+  e.preventDefault(); const form=e.currentTarget, button=form.querySelector('[type="submit"]'); button.disabled=true;
+  try {await api('/api/login',{password:$('#login-password').value}); form.reset(); $('#login-dialog').close(); await poll();}
+  catch (err) {form.querySelector('.form-error').textContent=err.message;} finally {button.disabled=false;}
+};
 async function start() {
+  updateSystemClock();
+  if (!['127.0.0.1','localhost'].includes(location.hostname)) {$('#where-chip').lastChild.textContent=' REMOTE'; $('#where-foot').lastChild.textContent=`Remote: ${location.hostname}`;}
   if(token) {try{await api('/api/session',{});token='';}catch(_){/* Bearer fallback if an older server does not support sessions. */}}
-  await poll();setInterval(poll,1500);setInterval(updateCountdowns,1000);
+  await poll();setInterval(poll,1500);setInterval(()=>{updateCountdowns();updateSystemClock();},1000);
 }
 start();

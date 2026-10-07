@@ -65,6 +65,14 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertIn("frame-ancestors 'none'",headers['Content-Security-Policy'])
         self.assertEqual(self.server.server_address[0],'127.0.0.1')
+        status, logo, headers = self.request(path='/navis-wordmark.png')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'image/png')
+        self.assertTrue(logo.startswith(b'\x89PNG\r\n\x1a\n'))
+        status, icon, headers = self.request(path='/navis-icon.svg')
+        self.assertEqual(status, 200)
+        self.assertEqual(headers['Content-Type'], 'image/svg+xml')
+        self.assertIn(b'<svg', icon)
         for path in ['/../core.py','/core.py','/api/token']:
             self.assertEqual(self.request(path=path,headers=self.auth())[0],404)
 
@@ -104,6 +112,58 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertIn(b'+safe test payload',body)
         self.assertEqual(self.request(path='/api/tasks/unknown-task',headers=self.auth())[0],404)
+
+
+class LoginAndRemoteTests(unittest.TestCase):
+    """Password sign-in, and a proxy's host name (tailscale serve) allowed only once a password is set."""
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.runtime = Runtime(Path(self.folder.name) / 'test.sqlite3')
+        self.pw = Path(self.folder.name) / 'password'
+        self.server = ControlServer(self.runtime, hosts=['box.tail1.ts.net'], password_file=self.pw)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.runtime.close()
+        self.folder.cleanup()
+
+    def request(self, method, path, headers, body=None):
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        result = (response.status, json.loads(response.read() or b'null'), response.headers)
+        connection.close()
+        return result
+
+    def test_password_hash_round_trip(self):
+        from navis.server import check_password, hash_password
+        stored = hash_password('correct horse', iterations=1000)
+        self.assertTrue(check_password('correct horse', stored))
+        self.assertFalse(check_password('wrong', stored))
+        self.assertFalse(check_password('x', 'garbage'))
+
+    def test_remote_needs_a_password_then_sign_in_works(self):
+        from navis.server import hash_password
+        remote = {'Host': 'box.tail1.ts.net', 'Origin': 'https://box.tail1.ts.net', 'Content-Type': 'application/json'}
+        self.assertEqual(self.request('GET', '/', {'Host': 'box.tail1.ts.net'})[0], 403)  # no password: remote closed
+        self.assertEqual(self.request('GET', '/', {'Host': 'other.example'})[0], 403)
+        self.pw.write_text(hash_password('correct horse', iterations=1000))
+        status, body, _ = self.request('GET', '/api/snapshot', remote)
+        self.assertEqual((status, body['login']), (401, True))
+        self.assertEqual(self.request('POST', '/api/login', remote, '{"password":"wrong"}')[0], 401)
+        self.assertEqual(self.request('POST', '/api/login', dict(remote, Origin='https://evil.example'), '{"password":"correct horse"}')[0], 403)
+        status, _, headers = self.request('POST', '/api/login', remote, '{"password":"correct horse"}')
+        self.assertEqual(status, 200)
+        self.assertIn('Secure', headers['Set-Cookie'])
+        cookie = {'Cookie': headers['Set-Cookie'].split(';')[0]}
+        self.assertEqual(self.request('GET', '/api/snapshot', dict(remote, **cookie))[0], 200)
+        # A proxy that rewrites Host to loopback still counts as remote by the browser's Origin.
+        local_host = {'Host': f'127.0.0.1:{self.server.server_port}', 'Origin': 'https://box.tail1.ts.net', 'Content-Type': 'application/json'}
+        self.assertEqual(self.request('POST', '/api/command', dict(local_host, **cookie), '{"action":"pause"}')[0], 200)
+        self.pw.unlink()
+        self.assertEqual(self.request('POST', '/api/command', dict(local_host, **cookie), '{"action":"resume"}')[0], 403)
 
 
 if __name__ == '__main__':

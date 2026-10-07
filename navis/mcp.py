@@ -15,9 +15,11 @@ TOOLS = [
          "status": {"type": "string", "enum": ["done", "failed"]},
          "summary": {"type": "string"}}}},
     {"name": "ask_user",
-     "description": "Ask the user a question, then end your turn. The task resumes with the answer.",
+     "description": "Ask the user a question, then end your turn. The task resumes with the answer. "
+                    "When the answers are known choices, pass them as options: the user picks one with a click.",
      "inputSchema": {"type": "object", "required": ["question"], "properties": {
-         "question": {"type": "string"}}}},
+         "question": {"type": "string"},
+         "options": {"type": "array", "maxItems": 6, "items": {"type": "string"}}}}},
     {"name": "delegate",
      "description": "Queue follow-up work as a separate task that starts after you finish, from your result. "
                     "scope must stay inside yours. Limited in number; delegated tasks cannot delegate.",
