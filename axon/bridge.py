@@ -92,10 +92,14 @@ class Bridge:
 
     def refresh_limits(self):
         home = runtime.data_dir() / "agents"
-        try:  # written by the Runner from claude's own output after each attempt
-            claude = json.loads((runtime.data_dir() / "claude-limits.json").read_text())
-        except (OSError, ValueError):
-            claude = None
+        seen = []
+        for f in (runtime.data_dir() / "claude-limits.json",   # headless: the Runner, from claude's stream
+                  runtime.data_dir() / "agents" / "claude" / "axon-limits.json"):  # interactive: claude's status line
+            try:
+                seen.append(json.loads(f.read_text()))
+            except (OSError, ValueError):
+                pass
+        claude = max(seen, key=lambda d: d.get("as_of", 0), default=None)
         self.limits = {"claude": claude, "codex": usage.codex_limits(home / "codex")}
 
     def close(self):

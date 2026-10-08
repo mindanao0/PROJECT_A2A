@@ -1,8 +1,11 @@
 """Interactive mode: the agent runs as a real terminal session (tmux) instead of one `-p` prompt."""
 
+import json
 import subprocess
 import threading
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from axon import runtime
 from tests.test_axon import DONE, AxonTest, edit, step
@@ -59,10 +62,36 @@ class Interactive(AxonTest):
         self.assertTrue(runtime.TUI_QUOTA_RE.search(runtime.ANSI_RE.sub(" ", raw)))
         self.assertFalse(runtime.TUI_QUOTA_RE.search("the rate limit module handles a quota"))
 
+    def test_a_quiet_session_is_flagged_as_waiting_for_the_user_and_cleared_when_it_moves(self):
+        tid = self.add(step("sleep", s=5) + step("shell", cmd="echo back") + step("hang"))
+        runner = threading.Thread(target=self.rt.run_until_idle, kwargs={"timeout": 60})
+        runner.start()
+        with mock.patch.object(runtime, "IDLE_SECONDS", 2):
+            self.wait(lambda: (self.task(tid)["note"] or "").startswith("waiting for you"), 15)
+            self.assertIn(f"task{tid}", self.task(tid)["note"])
+            self.wait(lambda: not self.task(tid)["note"], 15)
+        runtime.stop_task(self.store, tid)
+        runner.join(30)
+
+    def test_the_status_line_records_the_subscription_windows(self):
+        import os, sys
+        env = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.tmp)}
+        def feed(d):
+            subprocess.run([sys.executable, "-m", "axon.statusline"], input=json.dumps(d), text=True, env=env, check=True,
+                           cwd=Path(runtime.__file__).parent.parent)
+        feed({"model": {}})  # no rate_limits (API key, or before the first answer): nothing written
+        self.assertFalse((self.tmp / "axon-limits.json").exists())
+        feed({"rate_limits": {"five_hour": {"used_percentage": 23.5, "resets_at": 1738425600},
+                              "seven_day": {"used_percentage": 41.2, "resets_at": 1738857600}}})
+        got = json.loads((self.tmp / "axon-limits.json").read_text())
+        self.assertEqual([(w["window"], w["used"], w["resets_at"]) for w in got["windows"]],
+                         [("5h", 23.5, 1738425600), ("week", 41.2, 1738857600)])
+
     def test_claude_opens_with_the_prompt_instead_of_dash_p(self):
         argv, _, _ = runtime.claude_cmd("p", ["mcp"], self.tmp, self.tmp, interactive=True)
         self.assertNotIn("-p", argv)
         self.assertEqual(argv[1], "p")
+        self.assertIn("axon.statusline", argv[argv.index("--settings") + 1])
         argv, _, _ = runtime.claude_cmd("p", ["mcp"], self.tmp, self.tmp)
         self.assertEqual(argv[1:3], ["-p", "p"])
 

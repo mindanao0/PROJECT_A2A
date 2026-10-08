@@ -30,6 +30,8 @@ QUOTA_RE = re.compile(r"rate.?limit|usage.?limit|limit\s*reached|quota", re.I)
 # It positions words with cursor codes instead of spaces, so ANSI is replaced by a space before matching.
 # ponytail: Claude's real limit text was never seen (Phase 1b); widen when it is.
 TUI_QUOTA_RE = re.compile(r"limit\s+reached|hit\s+your [\w -]{0,20}limit", re.I)
+# ponytail: quiet for this long = the agent waits for the user (a permission prompt, or a question asked as plain text)
+IDLE_SECONDS = 90
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 STOPPABLE = ("QUEUED", "WAITING_INPUT", "WAITING_APPROVAL", "WAITING_QUOTA", "REVIEW")
 # What an agent CLI loads as its own settings from the repository: hooks and helpers there run commands with the
@@ -236,7 +238,8 @@ def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=F
     tools = ("Read,Glob,Grep" if readonly else "Read,Edit,Write,Glob,Grep") + (",WebFetch,WebSearch" if web else "")
     cfg.write_text(json.dumps({"mcpServers": {"axon": {"command": mcp[0], "args": mcp[1:]}}}))
     # Interactive: the prompt only opens the session, which stays for the user; the agent ends it with report_result.
-    head = [prompt] if interactive else ["-p", prompt, "--output-format", "stream-json", "--verbose"]
+    head = ([prompt, "--settings", json.dumps({"statusLine": {"type": "command", "command": shlex.join([sandbox.PY, "-m", "axon.statusline"])}})]
+            if interactive else ["-p", prompt, "--output-format", "stream-json", "--verbose"])
     argv = [str(exe), *head,
             "--mcp-config", str(cfg), "--strict-mcp-config", "--permission-mode", "acceptEdits",
             "--tools", tools,  # default-deny: the built-in set also has Cron/RemoteTrigger/...
@@ -931,6 +934,7 @@ class Runtime:
             tmux("set-option", "-t", name, *opt)
         tmux("pipe-pane", "-t", name, f"cat >> {shlex.quote(str(adir / 'agent.log'))}")  # quota text for QUOTA_RE
         deadline, timed_out, ended, rc, log, checked = time.time() + timeout, False, None, 0, adir / "agent.log", 0.0
+        size, moved, waiting = -1, time.time(), False
         while tmux("has-session", "-t", f"={name}").returncode == 0:
             if time.time() > deadline:
                 timed_out = True
@@ -939,6 +943,13 @@ class Runtime:
                 break  # a Stop that came before the scope existed has nothing to kill
             if time.time() > checked + 2:
                 checked = time.time()
+                # A working TUI keeps redrawing (spinner, timer); one that waits for its user prints nothing.
+                if (now := log.stat().st_size) != size:
+                    size, moved = now, time.time()
+                    if waiting:
+                        waiting = not self.store.move(tid, "RUNNING", ("RUNNING",), note="")
+                elif not waiting and time.time() > moved + IDLE_SECONDS:
+                    waiting = self.store.move(tid, "RUNNING", ("RUNNING",), note=f"waiting for you: open Chat, {name[10:]}")
                 if TUI_QUOTA_RE.search(ANSI_RE.sub(" ", log.read_bytes()[-8000:].decode(errors="replace"))):
                     rc = 1  # the caller reads the log and files it as quota
                     break
