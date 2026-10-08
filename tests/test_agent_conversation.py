@@ -29,10 +29,19 @@ CODEX = [
 
 class ReadableLog(unittest.TestCase):
     def test_claude_conversation(self):
-        text = runtime.readable_log("\n".join(CLAUDE))
+        text = runtime.readable_log("\n".join(CLAUDE), root="/x")  # paths in the clone are shown relative to it
         self.assertEqual(text.splitlines(), [
-            "→ Read(file_path=/x/README.md)", "  ← 1\thello from README", "The README says hello.",
+            "→ Read README.md", "  ← 1\thello from README", "The README says hello.",
             "■ finished (num_turns 2, cost $0.17)"])
+
+    def test_tool_calls_are_one_short_line(self):
+        def call(name, args):
+            return runtime.format_log_line(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": name, "input": args}]}}))
+        self.assertEqual(call("Edit", {"file_path": "a.py", "old_string": "x" * 500, "new_string": "y" * 500}), "→ Edit a.py")
+        self.assertEqual(call("mcp__navis__report_result", {"status": "done", "summary": "fixed"}), "■ report: done: fixed")
+        self.assertEqual(call("mcp__navis__ask_user", {"question": "Which?", "options": ["a", "b"]}), "? asks: Which? [a | b]")
+        self.assertEqual(call("mcp__navis__run_check", {"name": "unit"}), "→ run_check unit")
 
     def test_codex_conversation(self):
         text = runtime.readable_log("\n".join(CODEX))

@@ -37,7 +37,7 @@
     </div>
   </aside>
   <main>
-    <header class="topbar"><div><span class="muted">Workspace</span><span class="breadcrumb" aria-hidden="true">/</span><span id="view-label">Overview</span></div><div class="topbar-right"><button id="open-command" class="command-trigger" aria-label="Open command palette" aria-haspopup="dialog" aria-controls="command-dialog" aria-keyshortcuts="Control+k Meta+k"><span aria-hidden="true">⌘</span><span class="command-trigger-label">Command</span><kbd>Ctrl K</kbd></button><span class="local-chip"><i class="signal" aria-hidden="true"></i> LOCAL ONLY</span><button id="notifications" class="icon-button" aria-label="Enable browser notifications" title="Enable browser notifications">◷</button><button id="refresh" class="icon-button" aria-label="Refresh">↻</button></div></header>
+    <header class="topbar"><div><span class="muted">Workspace</span><span class="breadcrumb" aria-hidden="true">/</span><span id="view-label">Overview</span></div><div class="topbar-right"><button id="open-command" class="command-trigger" aria-label="Open command palette" aria-haspopup="dialog" aria-controls="command-dialog" aria-keyshortcuts="Control+k Meta+k"><span aria-hidden="true">⌘</span><span class="command-trigger-label">Command</span><kbd>Ctrl K</kbd></button><span class="local-chip" id="where-chip"><i class="signal" aria-hidden="true"></i> LOCAL</span><button id="notifications" class="icon-button" aria-label="Enable browser notifications" title="Enable browser notifications">◷</button><button id="refresh" class="icon-button" aria-label="Refresh">↻</button></div></header>
     <div class="page">
       <section id="command-masthead" class="command-masthead" aria-label="Navis command center">
         <svg class="circuit-traces" viewBox="0 0 680 260" fill="none" aria-hidden="true" focusable="false"><path d="M0 45h220l50 50h150l50-50h210M0 210h170l65-65h180l55 55h210M330 0v35l60 60v75l70 70h220M500 0v55l-45 45v55l55 55v50M590 0v80l-35 35v100l45 45"/><circle cx="220" cy="45" r="4"/><circle cx="170" cy="210" r="4"/><circle cx="420" cy="95" r="4"/></svg>
@@ -56,7 +56,7 @@
       <div id="runtime-banner" class="notice" aria-live="polite"><span class="notice-icon" aria-hidden="true">◌</span><div><strong>Connecting to runtime</strong><span>Checking current mode and capabilities.</span></div><span class="notice-badge">NAVIS</span></div>
       <div id="connection-alert" class="connection-alert" hidden role="alert"></div>
       <section id="content" aria-label="Workspace content"></section>
-      <footer><span><b>NAVIS</b> / PERSONAL COMMAND SYSTEM</span><span class="live-status"><time id="local-clock">LOCAL / —</time><span id="sync-state">SYNC / WAITING</span></span><span><i class="dot" aria-hidden="true"></i>Remote access disabled</span></footer>
+      <footer><span><b>NAVIS</b> / PERSONAL COMMAND SYSTEM</span><span class="live-status"><time id="local-clock">LOCAL / —</time><span id="sync-state">SYNC / WAITING</span></span><span id="where-foot"><i class="dot" aria-hidden="true"></i>This machine</span></footer>
     </div>
   </main>
 </div>
@@ -71,9 +71,11 @@
 <dialog id="task-dialog" aria-labelledby="create-title" aria-describedby="create-description">
   <form id="task-form"><div class="dialog-heading"><div><span class="eyebrow">NEW DIRECTIVE</span><h2 id="create-title">Create a task</h2></div><button type="button" class="icon-button" data-close="task-dialog" aria-label="Close">×</button></div>
     <p class="muted" id="create-description">This task runs against a simulated agent. It cannot access your repository.</p>
-    <label>Task title<input name="title" id="task-title" required maxlength="120" placeholder="e.g. Review retrieval edge cases"></label>
-    <label>Task description<textarea name="spec" id="task-spec" required maxlength="4000" rows="4" placeholder="Describe the outcome and acceptance criteria…"></textarea></label>
-    <div class="form-row"><label>Project<select name="project_id" id="task-project"></select></label><label>Path scope<input name="scope" id="task-scope" value="src/" required maxlength="500" placeholder="src/, tests/"></label></div>
+    <label>What should the agent do?<textarea name="spec" id="task-spec" required maxlength="4000" rows="4" placeholder="Short is fine, e.g. “fix the login error when the password is empty”"></textarea></label>
+    <div class="form-row"><label>Project<select name="project_id" id="task-project"></select></label><label>Path scope (optional)<input name="scope" id="task-scope" maxlength="500" placeholder="whole project, or e.g. src/, tests/"></label></div>
+    <label>Title (optional)<input name="title" id="task-title" maxlength="120" placeholder="default: the first line of the text above"></label>
+    <div class="form-row" id="task-flow-row" hidden><label>Start after task (optional)<select name="after_task_id" id="task-after"><option value="">No dependency</option></select></label><fieldset id="task-checks"><legend>Verified by (optional)</legend><div id="task-checks-list"></div></fieldset></div>
+    <p class="field-help" id="task-flow-help" hidden>A dependent task starts only when that task is completed, from its result. Ticked checks verify this task alone (for parallel work whose checks need each other's files); integration always runs every check.</p>
     <label>Start from completed task<select name="source_task_id" id="task-source"><option value="">New task / no source</option></select></label>
     <p class="field-help" id="source-description">Source artifacts are copied as a simulation context reference; no Git branch is created.</p>
     <label>Agent<select id="task-agent" disabled><option>Fake agent / simulation</option><option disabled>Codex / adapter unavailable</option><option disabled>Claude Code / adapter unavailable</option></select></label>
@@ -86,6 +88,7 @@
 <dialog id="project-dialog" aria-labelledby="project-title"><form id="project-form"><div class="dialog-heading"><h2 id="project-title">Add a project</h2><button type="button" class="icon-button" data-close="project-dialog" aria-label="Close">×</button></div><p id="project-description" class="muted">Add a project through the active runtime.</p><label>Project name<input name="name" required maxlength="80" placeholder="PROJECT_NAVIS"></label><div id="project-path-field"><label>Repository path<input name="path" maxlength="1000" placeholder="/home/user/projects/PROJECT_NAVIS"></label><p class="field-help">The runtime validates and grants repository access for this path.</p></div><p class="form-error" role="alert"></p><div class="dialog-footer"><button type="button" class="button secondary" data-close="project-dialog">Cancel</button><button type="submit" class="button primary">Add project</button></div></form></dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description"><form method="dialog"><div class="dialog-heading"><h2 id="confirm-title">Confirm control</h2></div><p id="confirm-description"></p><small id="confirm-attempt"></small><div class="dialog-footer"><button class="button secondary" value="cancel" autofocus>Keep task</button><button id="confirm-control" class="button danger" value="confirm">Confirm</button></div></form></dialog>
 <dialog id="copy-dialog" aria-labelledby="copy-title"><div class="dialog-heading"><h2 id="copy-title">Copy manually</h2><button class="icon-button" data-close="copy-dialog" aria-label="Close">×</button></div><label>Text to copy<textarea id="copy-text" rows="7" readonly></textarea></label></dialog>
+<dialog id="login-dialog" aria-labelledby="login-title"><form id="login-form"><div class="dialog-heading"><div><span class="eyebrow">NAVIS / SIGN IN</span><h2 id="login-title">Sign in</h2></div></div><label>Password<input type="password" name="password" id="login-password" required maxlength="200" autocomplete="current-password"></label><p class="form-error" role="alert"></p><div class="dialog-footer"><button type="submit" class="button primary">Sign in →</button></div></form></dialog>
 <div id="toast" role="status" hidden></div>
 <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 </body>

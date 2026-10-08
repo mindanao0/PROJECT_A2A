@@ -35,6 +35,47 @@ class Parse(unittest.TestCase):
         self.assertIsNone(usage.parse("claude", '{"type":"system"}\n'))
 
 
+class Limits(unittest.TestCase):
+    """The 5h/week windows shown in the Agent fleet."""
+    def test_codex_reads_its_last_recorded_turn(self):
+        import tempfile
+        from pathlib import Path
+        home = Path(tempfile.mkdtemp())
+        day = home / "sessions" / "2026" / "10" / "07"
+        day.mkdir(parents=True)
+        rl = {"primary": {"used_percent": 14.0, "window_minutes": 300, "resets_at": 1791362581},
+              "secondary": {"used_percent": 2.0, "window_minutes": 10080, "resets_at": 1791949381}}
+        line = lambda used: json.dumps({"timestamp": "2026-10-07T04:53:16.974Z", "type": "event_msg",
+                                        "payload": {"type": "token_count", "rate_limits": rl | {"primary": rl["primary"] | {"used_percent": used}}}})
+        (day / "rollout-2026-10-07T09-00-00-a.jsonl").write_text(line(90.0) + "\n")
+        (day / "rollout-2026-10-07T11-00-00-b.jsonl").write_text(line(10.0) + "\n" + line(14.0) + "\n" + '{"type":"other"}\n')
+        got = usage.codex_limits(home)
+        self.assertEqual(got["windows"], [{"window": "5h", "used": 14.0, "resets_at": 1791362581},
+                                          {"window": "week", "used": 2.0, "resets_at": 1791949381}])
+        self.assertAlmostEqual(got["as_of"], 1791348796.974, places=2)
+        self.assertIsNone(usage.codex_limits(home / "nothing"))
+
+    def test_claude_asks_only_with_a_valid_token_and_otherwise_shows_the_last_answer(self):
+        import io, tempfile
+        from pathlib import Path
+        from unittest import mock
+        home, cache = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "c.json"
+        creds = lambda expires: (home / ".credentials.json").write_text(json.dumps(
+            {"claudeAiOauth": {"accessToken": "tok", "expiresAt": expires * 1000}}))
+        answer = {"five_hour": {"utilization": 4.0, "resets_at": "2026-10-07T14:19:59+00:00"},
+                  "seven_day": {"utilization": 88.0, "resets_at": "2026-10-08T00:59:59+00:00"}, "seven_day_opus": None}
+        creds(time.time() + 3600)
+        with mock.patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(answer).encode())) as call:
+            got = usage.claude_limits(home, cache)
+        req = call.call_args[0][0]
+        self.assertEqual((req.full_url, req.get_header("Authorization")), (usage.CLAUDE_USAGE, "Bearer tok"))
+        self.assertEqual([(w["window"], w["used"]) for w in got["windows"]], [("5h", 4.0), ("week", 88.0)])
+        creds(time.time() - 60)  # expired: no request, the saved answer
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("must not call")):
+            self.assertEqual(usage.claude_limits(home, cache), got)
+        self.assertIsNone(usage.claude_limits(home / "none", cache.with_name("none.json")))
+
+
 class Accounting(NavisTest):
     def test_attempts_record_context_bytes_and_the_report_sums_exposed_usage(self):
         tid = self.add(edit("src/x.py") + DONE)

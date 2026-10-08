@@ -6,10 +6,17 @@ history.replaceState(null, '', location.pathname);
 let snapshot = null, cursor = 0, events = [], view = 'overview', project = 'all', search = '', stateFilter = 'all';
 let connected = false, selectedTask = null, taskDetail = null, detailTab = 'results', detailSignature = '', polling = false, toastTimer;
 let eventTask = 'all', eventType = 'all', eventLimit = 100, confirmPending = false;
-let taskGroup = 'all', lastSyncAt = 0, commandResults = [], commandIndex = 0;
+let taskGroup = 'all', lastSyncAt = 0, commandResults = [], commandIndex = 0, clockOffset = 0;
+const ago = s => (s=Math.max(0,Math.round(s)))<60?`${s}s`:s<3600?`${Math.floor(s/60)}m ${String(s%60).padStart(2,'0')}s`:`${Math.floor(s/3600)}h ${String(Math.floor(s%3600/60)).padStart(2,'0')}m`;
+// Running: how long, and how long since the agent last wrote anything; a long silence may be a hang.
+function liveText(task) {
+  const now = Date.now()/1000 + clockOffset, quiet = task.last_output ? now - task.last_output : now - task.running_since;
+  return `running ${ago(now - task.running_since)} · ${task.last_output ? `last output ${ago(quiet)} ago` : 'no output yet'}${quiet > 300 ? ' · quiet for a while: open Agent output to check' : ''}`;
+}
+const live = task => task.running_since ? `<p class="queue-hint live-hint" data-live="${escapeHTML(task.id)}">${escapeHTML(liveText(task))}</p>` : '';
 const columnLimits = [12,12,12,12];
 const names = {overview:'Control room',tasks:'Task board',agents:'Your agents',activity:'Activity log',artifacts:'Artifacts',resources:'Resources',settings:'Runtime settings',chat:'Agent chat'};
-const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.',chat:'Talk to claude or codex in a sandbox; slash commands and menus work as in a terminal.'};
+const subtitles = {overview:'Your directives. Your agents. Your control.',tasks:'Follow each task from queue to verified result.',agents:'Slots, cooldowns and available capabilities.',activity:'Trace decisions and controls for one task or the whole runtime.',artifacts:'Full results and verification evidence, tied to their attempt.',resources:'Dispatch capacity and measured resource availability.',settings:'Local transport, reconnect and current boundaries.',chat:'Claude, Codex or a shell in the sandbox: a real terminal. Select to copy, Ctrl+Shift+V to paste.'};
 const terminal = ['COMPLETED','FAILED','CANCELLED','BLOCKED'];
 const active = ['RUNNING','VERIFY','REVIEW','WAITING_INPUT','WAITING_APPROVAL','CANCELLING'];
 const attentionStates = ['WAITING_INPUT','WAITING_APPROVAL','WAITING_QUOTA','BLOCKED','REVIEW'];
@@ -52,7 +59,7 @@ async function openTaskDetail(taskID, openOutput=false) {
   const summary=snapshot?.tasks.find(t=>t.id===taskID);
   if (!summary) return;
   selectedTask=taskID; taskDetail=null;
-  detailTab=openOutput?'log':summary.state==='REVIEW'?'diff':'results'; detailSignature='';
+  detailTab=openOutput||summary.running_since?'log':summary.state==='REVIEW'?'diff':'results'; detailSignature='';
   updateDetail(true);
   if (!$('#detail-dialog').open) $('#detail-dialog').showModal();
   await loadTaskDetail(taskID);
@@ -129,7 +136,7 @@ async function api(path, body) {
     headers:{...(token ? {Authorization:`Bearer ${token}`} : {}),...(body ? {'Content-Type':'application/json'} : {})},
     ...(body ? {body:JSON.stringify(body)} : {}),signal:AbortSignal.timeout(7000)});
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`);
+  if (!response.ok) throw Object.assign(new Error(result.error || `Request failed (${response.status})`), {status:response.status, login:result.login});
   return result;
 }
 async function command(body) {
@@ -156,7 +163,8 @@ async function poll() {
     const result = await api(`/api/snapshot?cursor=${cursor}`);
     events = [...events,...result.events].slice(-1000); cursor = result.cursor;
     updateAttention(snapshot,result);
-    const changed = !snapshot || !connected || JSON.stringify({...result,events:[],cursor:0,latest_cursor:0}) !== JSON.stringify({...snapshot,events:[],cursor:0,latest_cursor:0});
+    if (result.now) clockOffset = result.now - Date.now()/1000;
+    const changed = !snapshot || !connected || JSON.stringify({...result,events:[],cursor:0,latest_cursor:0,now:0}) !== JSON.stringify({...snapshot,events:[],cursor:0,latest_cursor:0,now:0});
     snapshot = result; connected = true; lastSyncAt=Date.now(); updateSystemChrome();
     if ($('#command-dialog').open) renderCommands();
     $('#connection-alert').hidden = true; $('#local-connection').textContent = 'Connected';
@@ -176,7 +184,8 @@ async function poll() {
     updateCountdowns();
   } catch (err) {
     connected = false; updateSystemChrome(); if ($('#command-dialog').open) renderCommands(); $('#local-connection').textContent = 'Disconnected';
-    $('#connection-alert').textContent = 'Connection unavailable. Controls are disabled. If Navis restarted, reopen the full launch link from your terminal or ~/.local/state/navis/launch.url.';
+    if (err.status===401 && err.login && !$('#login-dialog').open) {$('#login-form .form-error').textContent=''; $('#login-dialog').showModal(); $('#login-password').focus();}
+    $('#connection-alert').textContent = err.status===401 ? (err.login ? 'Signed out. Sign in with your Navis password.' : 'Not signed in. Run `navis` on the Navis machine to open it with its launch link.') : 'Connection unavailable. Controls are disabled. If Navis restarted, run `navis` again or reload this page.';
     $('#connection-alert').hidden = false;
     ['#pause','#new-task','#add-project'].forEach(s=>$(s).disabled=true);
     $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
@@ -195,6 +204,7 @@ function countdown(until) {
 function timer(until) {return `<span data-countdown="${Number(until)}">${escapeHTML(countdown(until))}</span>`;}
 function updateCountdowns() {
   document.querySelectorAll('[data-countdown]').forEach(el=>el.textContent = connected ? countdown(Number(el.dataset.countdown)) : 'Disconnected / time unconfirmed');
+  document.querySelectorAll('[data-live]').forEach(el=>{const t=currentTask()?.id===el.dataset.live?currentTask():snapshot?.tasks.find(x=>x.id===el.dataset.live); if (t?.running_since) el.textContent=liveText(t);});
 }
 function queueHint(task) {
   const reasons = task.queue_reasons || [];
@@ -213,7 +223,7 @@ function stats(tasks) {
   </div>`;
 }
 function card(task) {
-  return `<button id="card-${escapeHTML(task.id)}" class="task-card" data-task="${escapeHTML(task.id)}"><div class="card-top"><span>NAV-${escapeHTML(shortID(task.id))}</span>${badge(task.state)}</div><h3>${escapeHTML(task.title)}</h3><span class="scope-label">⌁ ${escapeHTML(task.scope.join(', '))}</span>${['QUEUED','WAITING_QUOTA'].includes(task.state)?`<p class="queue-hint">${queueHint(task)}</p>`:''}<div class="card-bottom"><span><span class="agent-avatar" aria-hidden="true">${simulation()?'F':'A'}</span>${escapeHTML(task.backend)}</span><span>${date(task.updated_at)}</span></div></button>`;
+  return `<button id="card-${escapeHTML(task.id)}" class="task-card" data-task="${escapeHTML(task.id)}"><div class="card-top"><span>NAV-${escapeHTML(shortID(task.id))}</span>${badge(task.state)}</div><h3>${escapeHTML(task.title)}</h3><span class="scope-label">⌁ ${escapeHTML(task.scope.join(', '))}</span>${['QUEUED','WAITING_QUOTA'].includes(task.state)?`<p class="queue-hint">${queueHint(task)}</p>`:''}${live(task)}<div class="card-bottom"><span><span class="agent-avatar" aria-hidden="true">${simulation()?'F':'A'}</span>${escapeHTML(task.backend)}</span><span>${date(task.updated_at)}</span></div></button>`;
 }
 function integrationStrip() {
   if (simulation()) return '';
@@ -221,7 +231,7 @@ function integrationStrip() {
     const checks=i.checks.map(c=>`${escapeHTML(c.name)} ${c.rc?'✗':'✓'}`).join(', ')||'no checks configured';
     const detail=i.busy?`${i.busy==='verify'?'running every check on the merged commit…':`checking the merged commit for task ${escapeHTML(i.busy)}…`}`:`${i.tasks.length} task${i.tasks.length===1?'':'s'} merged at ${escapeHTML((i.commit||'').slice(0,10))} / checks on this exact commit: ${checks}`;
     const why=!i.busy&&!i.can_promote&&i.reason?`<br><small class="muted">${escapeHTML(i.reason)}</small>`:'';
-    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.verify_needed&&!i.busy?`<button class="button secondary" data-verify-integration="${escapeHTML(i.project_id)}">Run all checks</button>`:''}${i.review_needed&&!i.busy?`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" ${snapshot.capabilities?.handoff?.claude_review===true?'':'disabled title="Claude is not logged in."'}>Review with Claude</button>`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
+    return `<div class="attention-strip integration-strip"><span aria-hidden="true">⇥</span><span><strong>${escapeHTML(i.project_id)}</strong> integration branch: ${detail}${why}</span><span class="strip-actions">${i.verify_needed&&!i.busy?`<button class="button secondary" data-verify-integration="${escapeHTML(i.project_id)}">Run all checks</button>`:''}${i.review_needed&&!i.busy?`${['claude','codex'].map(a=>`<button class="button secondary" data-review-integration="${escapeHTML(i.project_id)}" data-agent="${a}" ${snapshot.capabilities?.handoff?.[a+'_review']===true?'':`disabled title="${a} is not logged in."`}>Review with ${a==='claude'?'Claude':'Codex'}</button>`).join('')}`:''}<button class="button secondary" data-discard="${escapeHTML(i.project_id)}" ${i.busy?'disabled':''}>Discard</button><button class="button primary" data-promote="${escapeHTML(i.project_id)}" ${i.can_promote&&!i.busy?'':'disabled'}>Fast-forward ${escapeHTML(i.branch||'branch')} →</button></span></div>`;
   }).join('');
 }
 function board(tasks) {
@@ -256,11 +266,23 @@ function providerRow(item) {
   const status=['Ready','Busy','Cooldown','Unavailable','Not tested','Not connected','Error'].includes(reported)?reported:'Unavailable';
   const slotText=p?.slot_limit!=null?`${p.slots_used??0} / ${p.slot_limit} slots`:p?.reason||(simulation()?'Disabled':'No runtime status');
   const sub=`${escapeHTML(slotText)}${until?`<br>${timer(Number(until))}`:''}`;
-  return agentRow(escapeHTML(item.name),escapeHTML(item.desc),item.mark,status,p?.id==='fake'?'fake':status.toLowerCase(),sub);
+  return agentRow(escapeHTML(item.name),escapeHTML(item.desc),item.mark,status,p?.id==='fake'?'fake':status.toLowerCase(),sub)+limitBars(p);
 }
 function providerCard(item) {
   const p=item.provider;
   return `<section class="panel agent-card">${providerRow(item)}<div class="capability-list"><span class="capability">${escapeHTML(p?.capability||'Status supplied by runtime')}</span></div><p>${escapeHTML(p?.message||'Rate-limit state appears here when the runtime reports a provider cooldown.')}</p></section>`;
+}
+// What is left of the subscription's 5-hour and weekly windows (the providers report percent used, not tokens).
+function limitBars(p) {
+  const l = p?.limits; if (!l?.windows?.length) return '';
+  const now = Date.now()/1000 + clockOffset;
+  const rows = l.windows.map(w => {
+    const reset = w.resets_at && w.resets_at < now, left = reset ? 100 : Math.max(0, Math.min(100, 100 - w.used));
+    const when = reset ? 'window reset' : w.resets_at ? `resets ${new Date(w.resets_at*1000).toLocaleString([], w.window==='5h'?{hour:'2-digit',minute:'2-digit'}:{weekday:'short',hour:'2-digit',minute:'2-digit'})}` : 'not started';
+    return `<div class="limit-row"><span class="limit-name">${escapeHTML(w.window)}</span><meter min="0" max="100" low="20" high="50" optimum="100" value="${left}" aria-label="${escapeHTML(w.window)} left"></meter><span>${Math.round(left)}% left · ${escapeHTML(when)}</span></div>`;
+  }).join('');
+  const age = now - l.as_of;
+  return `<div class="limits">${rows}<small>${age > 600 ? `as of ${ago(age)} ago · updates when ${escapeHTML(p.name)} runs` : `as of ${ago(age)} ago`}</small></div>`;
 }
 function agentPanel() {
   const rows=providerItems().map(providerRow).join('');
@@ -283,8 +305,12 @@ async function loadTaskDetail(taskID) {
 function eventToolbar(tasks) {
   return `<div class="event-toolbar"><label>Task<select id="event-task"><option value="all">All tasks and runtime</option>${tasks.map(t=>`<option value="${escapeHTML(t.id)}" ${eventTask===t.id?'selected':''}>${escapeHTML(t.title)}</option>`).join('')}</select></label><label>Event type<select id="event-type"><option value="all">All event types</option>${[...new Set(events.map(e=>e.type))].sort().map(type=>`<option ${eventType===type?'selected':''}>${escapeHTML(type)}</option>`).join('')}</select></label></div>`;
 }
+// The readable agent log: what the agent said stands out, tool calls are one line each, their output is dimmed.
+const logLine = line => `<span class="${/^(→|\?)/.test(line)?'log-tool':/^(■|✗)/.test(line)?'log-status':/^ {2}/.test(line)?'log-result':'log-text'}">${escapeHTML(line)}</span>`;
 function artifactBlock(artifact, task, expanded=false) {
-  return `<details ${expanded?'open':''}><summary>${escapeHTML(artifact.name)} / ${artifact.simulated?'SIMULATED':'RUNTIME EVIDENCE'}</summary><small>Attempt ${escapeHTML(artifact.attempt_id)} / SHA-256 ${escapeHTML(artifact.hash||'not supplied')}</small><pre>${escapeHTML(artifact.content)}</pre><button class="text-button" data-copy-artifact="${escapeHTML(artifact.id)}" data-copy-task="${escapeHTML(task.id)}">Copy full result</button></details>`;
+  const conversation = artifact.kind==='agent_log' && !String(artifact.id).startsWith('agent_log_raw');
+  const body = conversation ? `<pre class="conversation">${String(artifact.content??'').split('\n').map(logLine).join('\n')}</pre>` : `<pre>${escapeHTML(artifact.content)}</pre>`;
+  return `<details ${expanded&&!String(artifact.id).startsWith('agent_log_raw')?'open':''}><summary>${escapeHTML(artifact.name)} / ${artifact.simulated?'SIMULATED':'RUNTIME EVIDENCE'}</summary><small>Attempt ${escapeHTML(artifact.attempt_id)} / SHA-256 ${escapeHTML(artifact.hash||'not supplied')}</small>${body}<button class="text-button" data-copy-artifact="${escapeHTML(artifact.id)}" data-copy-task="${escapeHTML(task.id)}">Copy full result</button></details>`;
 }
 function artifacts(tasks) {
   const items = tasks.flatMap(t=>t.artifacts.map(a=>({artifact:a,task:t})));
@@ -295,6 +321,11 @@ function formatBytes(bytes) {
   const units=['B','KiB','MiB','GiB']; let value=Number(bytes), index=0;
   while(value>=1024&&index<units.length-1){value/=1024;index++;}
   return `${value.toFixed(index?1:0)} ${units[index]}`;
+}
+function usagePanel() {
+  const rows=snapshot.usage||[]; if (simulation()) return '';
+  const k=n=>n>=10000?`${(n/1000).toFixed(1)}k`:String(n);
+  return `<section class="panel"><div class="panel-header"><h2>Usage, last 24 hours</h2><span class="muted">What each CLI exposed; blank means it exposed nothing</span></div>${rows.length?`<table class="usage-table"><thead><tr><th>Agent</th><th>Kind</th><th>Attempts</th><th>Time</th><th>Navis prompt</th><th>Input tokens</th><th>Output</th><th>Cost</th><th>Settings</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escapeHTML(r.agent)}</td><td>${escapeHTML(r.kind)}</td><td>${r.attempts} (${escapeHTML(Object.entries(r.outcomes).map(([o,n])=>`${o}:${n}`).join(' '))})</td><td>${Math.round(r.seconds)} s</td><td>${(r.prompt_bytes/1024).toFixed(1)} KB</td><td>${r.with_usage?`${k(r.input)} (${k(r.cached)} cached)`:'-'}</td><td>${r.with_usage?k(r.output):'-'}</td><td>${r.with_usage&&r.cost_usd?`$${r.cost_usd.toFixed(3)}`:'-'}</td><td>${escapeHTML(r.settings.join(', '))}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No finished attempts in the last 24 hours.</p>'}</section>`;
 }
 function resourcePanel() {
   const slots = snapshot.resources?.slots || [];
@@ -352,15 +383,25 @@ function render() {
     html = `<div class="agent-grid">${fakeCard}${cards||`<section class="panel">${empty('No providers reported','Provider status appears when the runtime supplies it.')}</section>`}</div>`;
   } else if (view==='activity') html = `<section class="panel event-log"><div class="panel-header"><h2>Runtime events</h2><span class="muted">Cursor ${cursor} / latest 1,000 retained in this tab</span></div>${eventToolbar(tasks)}${eventList(eventLimit,eventTask,eventType)}${eventLimit<1000?'<button class="text-button" id="more-events">Show more events</button>':''}</section>`;
   else if (view==='artifacts') html = artifacts(tasks);
-  else if (view==='chat') {if ($('#chat-root')) return; html = chatPanel();}
-  else if (view==='resources') html = resourcePanel();
+  else if (view==='chat') {if ($('#chat-root')) return; html = chatPanel(); chatDisconnect(); chatSession='';}
+  else if (view==='resources') html = resourcePanel()+usagePanel();
   else html = settingsPanel();
+  if (view!=='chat') chatDisconnect();
   $('#content').innerHTML = html; restoreFocus(focus); updateAttention(null,snapshot); updateCountdowns();
   if (view==='chat') chatTick();
 }
 function populateSources(selected='') {
   const projectID = $('#task-project').value;
   $('#task-source').innerHTML = '<option value="">New task / no source</option>'+snapshot.tasks.filter(t=>t.project_id===projectID&&t.state==='COMPLETED').map(t=>`<option value="${escapeHTML(t.id)}" data-attempt="${escapeHTML(t.attempt_id)}" ${t.id===selected?'selected':''}>${escapeHTML(t.title)} / ${escapeHTML(shortID(t.attempt_id))}</option>`).join('');
+}
+function syncFlowRow() {
+  const row=$('#task-flow-row'), help=$('#task-flow-help'), pid=$('#task-project').value;
+  const proj=snapshot.projects.find(x=>x.id===pid), real=!simulation();
+  row.hidden=help.hidden=!real;
+  if (!real) return;
+  $('#task-after').innerHTML='<option value="">No dependency</option>'+snapshot.tasks.filter(t=>t.project_id===pid&&t.kind!=='review'&&!['FAILED','CANCELLED'].includes(t.state)).map(t=>`<option value="${escapeHTML(t.id)}">${escapeHTML(t.title)} (${escapeHTML(t.state)})</option>`).join('');
+  const names=proj?.checks||[];
+  $('#task-checks-list').innerHTML=names.length?names.map(n=>`<label class="inline-check"><input type="checkbox" name="checks" value="${escapeHTML(n)}"> ${escapeHTML(n)}</label>`).join(' '):'<span class="muted">This project has no checks.</span>';
 }
 function syncModelRow() {
   const row=$('#task-model-row'), agent=$('#task-agent').value, o=(snapshot.agent_options||{})[agent];
@@ -381,6 +422,7 @@ function openTaskForm(source=null) {
   $('#source-description').textContent = isReal ? 'The new task starts from the result commit of that task (its refs/navis/attempts/* ref).' : 'Source artifacts are copied as a simulation context reference; no Git branch is created.';
   $('#task-project').innerHTML = snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${(source?.project_id||project)===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('');
   populateSources(source?.id||'');
+  syncFlowRow();
   if (source) {$('#task-title').value = `Continue: ${source.title}`.slice(0,120);$('#task-spec').value = `Continue the work from “${source.title}”.\n\nDescribe the next outcome and acceptance criteria.`;$('#task-scope').value = source.scope.join(', ');}
   $('#task-dialog').showModal();
 }
@@ -399,7 +441,7 @@ function detailPanel(task) {
     const prompts = task.artifacts.filter(a=>a.kind==='prompt');
     return prompts.length ? prompts.map(a=>artifactBlock(a,task,true)).join('') : `${empty('No provider prompt was sent','These are the task instructions saved in Navis. They are not a prompt delivered to a model.')}<pre>${escapeHTML(task.spec)}</pre>${task.instructions.map(i=>`<pre>Instruction v${i.version}\n${escapeHTML(i.text)}</pre>`).join('')}`;
   }
-  if (detailTab==='attempts') return task.attempts.map(a=>`<div class="detail-section"><small>${escapeHTML(a.id)} / ${date(a.started_at)} / ${escapeHTML(a.backend)}</small>${badge(a.state||'RUNNING')}</div>`).join('') || empty('Waiting for dispatch','No attempt has started yet.');
+  if (detailTab==='attempts') return task.attempts.map(a=>`<div class="detail-section"><small>${escapeHTML(a.id)} / ${date(a.started_at)} / ${escapeHTML(a.backend)}${a.model||a.effort?` / ${escapeHTML(a.model||'default')} · ${escapeHTML(a.effort||'default')}`:''}${a.usage?` / ${a.usage.input} in (${a.usage.cached} cached) · ${a.usage.output} out${a.usage.cost_usd?` · $${a.usage.cost_usd.toFixed(3)}`:''}`:''}</small>${badge(a.state||'RUNNING')}</div>`).join('') || empty('Waiting for dispatch','No attempt has started yet.');
   return task.artifacts.filter(a=>!['diff','agent_log','prompt'].includes(a.kind)).map(a=>artifactBlock(a,task,true)).join('') || empty('No results yet','Result and verification evidence will appear here after a simulated step.','◇');
 }
 function updateDetail(force=false) {
@@ -409,6 +451,8 @@ function updateDetail(force=false) {
   const focus = rememberFocus();
   const saved = {}; $('#task-detail').querySelectorAll('textarea').forEach(el=>saved[el.name]=el.value);
   const disclosureState = [...$('#task-detail').querySelectorAll('details')].map(el=>el.open);
+  const pres = [...$('#task-detail').querySelectorAll('pre')].map(el=>el.scrollHeight-el.scrollTop-el.clientHeight<40 ? -1 : el.scrollTop);
+  const dialogTop = $('#detail-dialog').scrollTop;
   detailSignature = signature;
   const controls = [];
   const gracefulStop=simulation()||snapshot.capabilities?.controls?.graceful_stop===true;
@@ -424,7 +468,10 @@ function updateDetail(force=false) {
     const handoff=snapshot.capabilities?.handoff||{};
     controls.push(`<button class="button secondary" data-action="review_with_claude" ${handoff.claude_review===true?'':'disabled title="Claude review is unavailable until the runtime reports a logged-in adapter."'}>Review with Claude</button>`);
     controls.push(`<button class="button secondary" data-action="continue_with_codex" ${handoff.codex_continue===true?'':'disabled title="Codex continuation is unavailable until the runtime reports a logged-in adapter."'}>Continue with Codex</button>`);
+    controls.push(`<button class="button secondary" data-action="review_with_codex" ${handoff.codex_review===true?'':'disabled title="Codex is not logged in."'}>Review with Codex</button>`);
+    controls.push(`<button class="button secondary" data-action="continue_with_claude" ${handoff.claude_continue===true?'':'disabled title="Claude is not logged in."'}>Continue with Claude</button>`);
   }
+  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="apply" title="Write these changes into your project folder as uncommitted edits. Nothing is written if your own edits touch the same lines.">Apply to my folder</button>');
   if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
   if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
   const latestReview = (task.reviews||[])[0];
@@ -438,9 +485,11 @@ function updateDetail(force=false) {
   const reasons = task.queue_reasons || [];
   const tabLabels=[['results','Results'],['diff','Code diff'],['log','Agent output'],['prompt','Prompt / instructions'],['attempts','Attempts']];
   const activeLabel=tabLabels.find(([id])=>id===detailTab)?.[1]||'Results';
-  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${(snapshot.agent_options||{})[task.backend]?`<div><span>Model / effort</span>${escapeHTML(task.model||'default')} / ${escapeHTML(task.effort||'default')}</div>`:''}${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}${reviewBlock}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
+  $('#task-detail').innerHTML = `<div class="dialog-heading"><div><span class="eyebrow">NAV-${escapeHTML(shortID(task.id))} / ${simulation()?'SIMULATION':'RUNTIME'}</span><h2 id="detail-title">${escapeHTML(task.title)}</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Close task details">×</button></div><div class="detail-meta">${badge(task.state)}<span class="muted">${escapeHTML(task.backend)}</span></div>${task.state==='REVIEW'?'<div class="review-callout"><strong>Review required</strong><span>Inspect the complete diff, file policy labels and verification evidence before approving this attempt.</span></div>':''}<p class="detail-description">${escapeHTML(task.spec)}</p><div class="detail-fields"><div><span>Scope</span>${escapeHTML(task.scope.join(', '))}</div><div><span>Current attempt</span>${escapeHTML(task.attempt_id||'Not dispatched')}</div><div><span>Attempts</span>${task.attempts.length}</div>${task.checks?`<div><span>Verified by</span>${escapeHTML(task.checks.join(', '))}</div>`:''}${task.after?`<div><span>Starts after</span>task ${escapeHTML(task.after)}</div>`:''}${(snapshot.agent_options||{})[task.backend]?`<div><span>Model / effort</span>${escapeHTML(task.model||'default')} / ${escapeHTML(task.effort||'default')}</div>`:''}${simulation()?`<div><span>Scenario</span>${escapeHTML(task.scenario)}</div>`:`<div><span>Result commit</span>${escapeHTML((task.head||'none').slice(0,12))}</div>`}</div><p class="muted">${escapeHTML(task.activity)}</p>${live(task)}${reasons.length?`<ul class="queue-reasons">${reasons.map(r=>`<li>${escapeHTML(r.message)}${r.until?` / ${timer(r.until)}`:''}${r.task_id?`<button class="text-button" data-task="${escapeHTML(r.task_id)}">Open blocking task ↗</button>`:''}</li>`).join('')}</ul>`:''}${task.source?`<div class="detail-section"><h3>Source task</h3><button class="text-button" data-task="${escapeHTML(task.source.task_id)}">${escapeHTML(task.source.title)} ↗</button><small>Attempt ${escapeHTML(task.source.attempt_id)} / ${task.source.artifacts.length} saved artifact references</small></div>`:''}${request}${reviewBlock}<div class="detail-actions">${controls.join('')}</div><div class="detail-tabs" role="tablist" aria-label="Task evidence">${tabLabels.map(([id,label])=>`<button type="button" id="detail-tab-${id}" role="tab" class="detail-tab" data-detail-tab="${id}" aria-selected="${detailTab===id}" aria-controls="detail-evidence" tabindex="${detailTab===id?'0':'-1'}">${label}</button>`).join('')}</div><section id="detail-evidence" role="tabpanel" tabindex="0" aria-labelledby="detail-tab-${detailTab}" aria-label="${escapeHTML(activeLabel)}" aria-busy="${!taskDetail}">${!taskDetail?empty('Loading task evidence','Only the selected task’s full diff, log, prompt and artifacts are being loaded.'):detailPanel(task)}</section>${!terminal.includes(task.state)&&task.state!=='CANCELLING'?'<section class="detail-section"><h3>Add an instruction</h3><form id="instruction-form"><label>Versioned guidance for the next step<textarea id="task-instruction" name="instruction" rows="2" required maxlength="2000"></textarea></label><button class="button secondary" type="submit">Save instruction</button></form></section>':''}`;
   $('#task-detail').querySelectorAll('textarea').forEach(el=>{if(saved[el.name])el.value=saved[el.name];});
   if (!force) $('#task-detail').querySelectorAll('details').forEach((el,i)=>{if(i<disclosureState.length)el.open=disclosureState[i];});
+  if (!force) {$('#detail-dialog').scrollTop = dialogTop; $('#task-detail').querySelectorAll('pre').forEach((el,i)=>{if (i<pres.length) el.scrollTop = pres[i]<0 ? el.scrollHeight : pres[i];});}
+  else if (detailTab==='log') $('#task-detail').querySelectorAll('pre.conversation').forEach(el=>el.scrollTop=el.scrollHeight);
   if (!connected) $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
   restoreFocus(focus); updateCountdowns();
 }
@@ -472,8 +521,8 @@ async function copyText(text) {
 }
 document.addEventListener('click',async e=>{
   const close = e.target.closest('[data-close]'); if (close) {document.getElementById(close.dataset.close).close();return;}
-  const chatKey=e.target.closest('[data-chat-key]'); if (chatKey) {chatSend({key:chatKey.dataset.chatKey});return;}
-  const chatTab=e.target.closest('[data-chat-tab]'); if (chatTab) {chatSwitch(chatTab.dataset.chatTab);return;}
+  const chatKey=e.target.closest('[data-chat-key]'); if (chatKey) {if (chatSocket?.readyState===1) chatSocket.send(JSON.stringify({data:chatKeys[Number(chatKey.dataset.chatKey)][0]})); chatTerm?.focus(); return;}
+  const chatTab=e.target.closest('[data-chat-tab]'); if (chatTab) {chatConnect(chatTab.dataset.chatTab).then(chatTick);return;}
   const chatX=e.target.closest('[data-chat-close]'); if (chatX) {
     if (confirm(`Close chat ${chatTitle(chatX.dataset.chatClose)}? The agent stops; its project clone is kept.`)) {try {await chatApi({action:'chat_close',session:chatX.dataset.chatClose}); chatTick();} catch (err) {toast(err.message);}}
     return;
@@ -524,7 +573,7 @@ document.addEventListener('click',async e=>{
   const reviewInt = e.target.closest('[data-review-integration]'); if (reviewInt) {
     if (!connected||reviewInt.disabled) return;
     reviewInt.disabled=true;
-    const result=await command({action:'review_integration',project_id:reviewInt.dataset.reviewIntegration,agent:'claude'});
+    const result=await command({action:'review_integration',project_id:reviewInt.dataset.reviewIntegration,agent:reviewInt.dataset.agent||'claude'});
     if (result) toast(result.duplicate?'A matching review is already queued.':'Review queued; the verdict appears here when it finishes.');
     reviewInt.disabled=false; return;
   }
@@ -534,6 +583,7 @@ document.addEventListener('click',async e=>{
     const action = control.dataset.action;
     const captured = {task_id:task.id,attempt_id:task.attempt_id,pending_id:task.pending?.id};
     if (['stop','kill'].includes(action)&&!await confirmControl(action,task)) return;
+    if (action==='apply'&&!confirm(`Write the changes of “${task.title}” into ${snapshot.projects.find(p=>p.id===task.project_id)?.path||'the project folder'}? They arrive as uncommitted edits; nothing is written if your own edits touch the same lines.`)) return;
     control.disabled = true;
     const result = await command({action,...captured});
     if (result) toast(result.message||(result.task_id&&action==='revise'?(result.duplicate?'That revision is already queued.':`Revision queued as task ${result.task_id}.`):result.expired?'Request expired; task blocked.':'Control accepted by runtime.'));
@@ -550,13 +600,15 @@ $('#notifications').onclick = async ()=>{
   try {const permission=await Notification.requestPermission();toast(permission==='granted'?'Notifications enabled while this page stays open.':'Notifications unavailable. The tab title still shows waiting tasks.');}
   catch (_) {toast('Notifications unavailable in this browser.');}
 };
-$('#task-project').onchange = ()=>populateSources();
+$('#task-project').onchange = ()=>{populateSources();syncFlowRow();};
 $('#task-form').onsubmit = async e=>{
   e.preventDefault();if(!connected)return;
   const form=e.currentTarget, button=form.querySelector('[type="submit"]');button.disabled=true;
   const fields=Object.fromEntries(new FormData(form));
+  delete fields.checks; const ticked=[...form.querySelectorAll('input[name="checks"]:checked')].map(i=>i.value); if(ticked.length)fields.checks=ticked;
+  fields.title=(fields.title||'').trim()||(fields.spec||'').trim().split('\n')[0].slice(0,120); fields.scope=(fields.scope||'').trim()||'.';
   if(fields.source_task_id)fields.source_attempt_id=$('#task-source').selectedOptions[0]?.dataset.attempt;
-  try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':simulation()?'Task queued for simulation.':'Task queued.');selectedTask=result.task_id;taskDetail=null;detailTab='results';updateDetail(true);$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);}
+  try {const result=await api('/api/command',{action:'create_task',...fields});$('#task-dialog').close();await poll();toast(result.duplicate?'Matching task already exists; opening it.':simulation()?'Task queued for simulation.':'Task queued.');selectedTask=result.task_id;taskDetail=null;detailTab=simulation()?'results':'log';updateDetail(true);$('#detail-dialog').showModal();await loadTaskDetail(selectedTask);}
   catch(err){form.querySelector('.form-error').textContent=err.message;}finally{button.disabled=false;}
 };
 $('#project-form').onsubmit = async e=>{
@@ -619,39 +671,61 @@ document.addEventListener('keydown',e=>{
   else if (/^[1-7]$/.test(e.key)&&snapshot) {e.preventDefault();navigateView(Object.keys(names)[Number(e.key)-1]);$('#page-title').focus({preventScroll:true});}
 });
 
-// Chat: a window onto the tmux session of an interactive agent (poll the screen, send text or named keys).
-let chatSession = '', chatScreenText = '', chatBusy = false;
-const chatKeys = [['Up','↑'],['Down','↓'],['Left','←'],['Right','→'],['Tab','Tab'],['BTab','⇧Tab'],['Escape','Esc'],['Enter','Enter'],['C-j','New line'],['PPage','PgUp'],['NPage','PgDn'],['Home','Home'],['End','End'],['BSpace','⌫'],['C-c','Ctrl-C'],['C-d','Ctrl-D']];
+// Chat: a real terminal (xterm.js, loaded on first use) on the agent's tmux session over a WebSocket.
+let chatSession = '', chatTerm = null, chatFit = null, chatSocket = null, chatLoading = null;
+// For phones and keys the browser keeps: each button types its terminal sequence.
+const chatKeys = [['\x1b','Esc'],['\t','Tab'],['\x1b[Z','⇧Tab'],['\x1b[A','↑'],['\x1b[B','↓'],['\x1b[D','←'],['\x1b[C','→'],['\r','Enter'],['\n','New line'],['\x03','Ctrl-C'],['\x04','Ctrl-D']];
 const chatApi = body => api('/api/command', body);
 function chatPanel() {
-  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><pre id="chat-screen" aria-label="Agent terminal. Typing here goes to the agent." tabindex="0">Start a chat, or pick a running one.</pre><p class="muted chat-hint">Click the screen and type: every key goes to the agent (Ctrl, Alt, F-keys, arrows, Shift+Tab, Shift+Enter = new line). Press Ctrl+Shift+Space to leave the screen. Keys the browser keeps for itself (Ctrl+W, Ctrl+T, …) go through the field below.</p><div class="chat-bar chat-keys">${chatKeys.map(([k,l])=>`<button class="button secondary" type="button" data-chat-key="${k}">${l}</button>`).join('')}</div><form id="chat-anykey" class="chat-bar"><input id="chat-anykey-input" list="chat-key-names" autocomplete="off" maxlength="24" placeholder="Any key, e.g. C-o  M-b  S-Tab  F2  C-M-Left" aria-label="Any key by tmux name"><datalist id="chat-key-names">${['C-o','C-r','C-t','C-l','C-w','C-z','M-b','M-f','M-Enter','S-Tab','F1','F2','F5','C-Left','C-Right'].map(k=>`<option value="${k}">`).join('')}</datalist><button class="button secondary" type="submit">Press key</button></form><form id="chat-send" class="chat-bar"><input id="chat-input" autocomplete="off" maxlength="2000" placeholder="Type a message or a /command, then Enter. Paste or drop an image to attach it." aria-label="Message"><button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden><button class="button primary" type="submit">Send</button></form><p class="muted">Each chat runs in its own sandboxed clone of the project; your checkout is never touched. Attach from a terminal with <code>navis-cli chat -p PROJECT -a AGENT [-n NAME]</code>.</p></section>`;
+  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="shell">Shell (bash in the sandbox)</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><div id="chat-term" class="chat-term" aria-label="Agent terminal. Typing here goes to the agent.">Start a chat, or pick a running one.</div><div class="chat-bar chat-keys">${chatKeys.map(([,l],i)=>`<button class="button secondary" type="button" data-chat-key="${i}">${l}</button>`).join('')}<button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><p class="muted chat-hint">Click the terminal and type, as in any terminal. Drag to select = copy; Ctrl+Shift+V = paste; the wheel scrolls back. Paste or drop an image to attach it. Each chat runs in its own sandboxed clone of the project; your checkout is never touched. From a terminal: <code>navis chat</code>.</p></section>`;
 }
 const chatTitle = n => n.replace(/^navis-chat-/, '');
 function chatTabs(sessions) {
   const sig = sessions.join('|') + '#' + chatSession, tabs = $('#chat-tabs');
-  if (tabs.dataset.sig === sig) return;
+  if (!tabs || tabs.dataset.sig === sig) return;
   tabs.dataset.sig = sig;
   tabs.innerHTML = sessions.map(n=>`<span class="chat-tab ${n===chatSession?'active':''}"><button type="button" role="tab" aria-selected="${n===chatSession}" data-chat-tab="${escapeHTML(n)}">${escapeHTML(chatTitle(n))}</button><button type="button" data-chat-close="${escapeHTML(n)}" aria-label="Close chat ${escapeHTML(chatTitle(n))}">×</button></span>`).join('') || '<span class="muted">No chats running.</span>';
 }
-function chatSwitch(name) {chatSession=name; chatScreenText=''; $('#chat-screen').textContent='…'; chatTick();}
 async function chatTick() {
-  if (view!=='chat'||chatBusy||!$('#chat-root')) return;
-  chatBusy = true;
+  if (view!=='chat'||!$('#chat-root')) return;
   try {
     const {sessions} = await chatApi({action:'chat_list'});
-    if (!sessions.includes(chatSession)) {chatSession = sessions[0] || ''; chatScreenText = '';}
+    if (!sessions.includes(chatSession) || !chatSocket) chatConnect(sessions.includes(chatSession) ? chatSession : sessions[0] || '');
     chatTabs(sessions);
-    if (chatSession) {
-      const {screen} = await chatApi({action:'chat_screen',session:chatSession}), pre = $('#chat-screen');
-      const text = screen.replace(/\s+$/,'');
-      if (text !== chatScreenText) {
-        const stick = !chatScreenText || pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
-        chatScreenText = text; pre.textContent = text || '(no output yet)';
-        if (stick) pre.scrollTop = pre.scrollHeight;
-      }
-    } else $('#chat-screen').textContent = 'Start a chat, or pick a running one.';
-  } catch (err) {if (!/Unknown chat/.test(err.message)) $('#chat-screen').textContent = err.message;}
-  chatBusy = false;
+  } catch (err) {toast(err.message);}
+}
+function loadScript(src) {
+  return new Promise((ok, fail) => {const s=document.createElement('script'); s.src=src; s.onload=ok; s.onerror=()=>fail(new Error(`Could not load ${src}`)); document.head.append(s);});
+}
+function chatDisconnect() {const ws=chatSocket; chatSocket=null; ws?.close(); chatTerm?.dispose(); chatTerm=null;}
+async function chatConnect(name) {
+  const box = $('#chat-term'); if (!box) return;
+  if (name === chatSession && chatSocket) return;
+  chatDisconnect(); chatSession = name;
+  if (!name) {box.textContent = 'Start a chat, or pick a running one.'; return;}
+  try {
+    chatLoading ||= (async()=>{const l=document.createElement('link'); l.rel='stylesheet'; l.href='/xterm.css'; document.head.append(l); await loadScript('/xterm.js'); await loadScript('/addon-fit.js');})();
+    await chatLoading;
+  } catch (err) {chatLoading=null; box.textContent=err.message; return;}
+  if (chatSession !== name || chatSocket) return;  // switched again while loading
+  box.textContent = '';
+  const term = chatTerm = new Terminal({fontSize:13, cursorBlink:true, scrollback:0, macOptionIsMeta:true, fontFamily:'ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace', theme:{background:'#050505', foreground:'#e6e6e6', cursor:'#ff3b3b', selectionBackground:'#ff3b3b55'}});
+  chatFit = new FitAddon.FitAddon(); term.loadAddon(chatFit); term.open(box); chatFit.fit();
+  // tmux sends what you select with the mouse as OSC 52; put it on the system clipboard like a desktop terminal.
+  term.parser.registerOscHandler(52, data => {
+    const b64 = data.slice(data.indexOf(';') + 1);
+    if (b64 && b64 !== '?') try {navigator.clipboard?.writeText(new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)))).catch(()=>{});} catch (_) {/* not base64 */}
+    return true;
+  });
+  new ResizeObserver(()=>{if (chatTerm===term) chatFit.fit();}).observe(box);
+  const ws = chatSocket = new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/api/chat/ws?session=${encodeURIComponent(name)}`);
+  ws.binaryType = 'arraybuffer';
+  const send = msg => {if (ws.readyState===1) ws.send(JSON.stringify(msg));};
+  term.onData(data=>send({data}));
+  term.onResize(({cols,rows})=>send({resize:[cols,rows]}));
+  ws.onopen = () => {send({resize:[term.cols,term.rows]}); term.focus();};
+  ws.onmessage = e => term.write(new Uint8Array(e.data));
+  ws.onclose = () => {if (chatSocket===ws) {chatSocket=null; term.write('\r\n\x1b[2m[disconnected; reconnecting…]\x1b[0m\r\n'); setTimeout(chatTick, 1000);}};
 }
 async function chatUpload(file) {
   if (!chatSession) {toast('Start or pick a chat first.'); return;}
@@ -661,55 +735,31 @@ async function chatUpload(file) {
     const response = await fetch('/api/chat/upload?session=' + encodeURIComponent(chatSession), {method:'POST', credentials:'same-origin', headers:{'Content-Type':file.type}, body:file});
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Upload failed');
-    toast('Image attached. Add your question and press Send.'); setTimeout(chatTick, 300); $('#chat-input').focus();
+    toast('Image attached. Add your question and press Enter.'); chatTerm?.focus();
   } catch (err) {toast(err.message);}
 }
-async function chatSend(body) {
-  if (!chatSession) {toast('Start or pick a chat first.'); return;}
-  try {await chatApi({action:'chat_send',session:chatSession,...body}); setTimeout(chatTick,150);}
-  catch (err) {toast(err.message);}
-}
 $('#content').addEventListener('submit', async e => {
-  if (e.target.id==='chat-anykey') {e.preventDefault(); const input=$('#chat-anykey-input'); const key=input.value.trim(); if (key) await chatSend({key}); return;}
-  if (e.target.id==='chat-send') {e.preventDefault(); const input=$('#chat-input'); const text=input.value; input.value=''; await chatSend({text,enter:true});}
-  else if (e.target.id==='chat-start') {
-    e.preventDefault(); const button=e.target.querySelector('[type="submit"]'); button.disabled=true; toast('Starting chat… the first start clones the project.');
-    try {chatSession=(await chatApi({action:'chat_start',...Object.fromEntries(new FormData(e.target))})).session; chatScreenText=''; $('#chat-tabs').dataset.sig=''; chatTick();}
-    catch (err) {toast(err.message);} finally {button.disabled=false;}
-  }
-});
-const chatNamed = {Enter:'Enter',Escape:'Escape',Tab:'Tab',Backspace:'BSpace',Delete:'DC',Insert:'IC',ArrowUp:'Up',ArrowDown:'Down',ArrowLeft:'Left',ArrowRight:'Right',Home:'Home',End:'End',PageUp:'PPage',PageDown:'NPage',' ':'Space'};
-// KeyboardEvent -> {key} (a tmux key name) or {text}; null when it is only a modifier or has no terminal meaning.
-function chatKeyOf(e) {
-  const base = chatNamed[e.key] || (/^F([1-9]|1[0-2])$/.test(e.key) ? e.key : null), mods = (e.ctrlKey?'C-':'')+(e.altKey?'M-':'');
-  if (base === 'Tab' && e.shiftKey && !e.ctrlKey && !e.altKey) return {key:'BTab'};
-  if (base === 'Enter' && e.shiftKey && !e.ctrlKey && !e.altKey) return {key:'C-j'};  // new line in claude and codex
-  if (base) return {key: (e.shiftKey && !['Tab','Enter'].includes(base) ? 'S-' : '') + mods + base};
-  if (e.key.length === 1 || [...e.key].length === 1) {
-    if (!e.ctrlKey && !e.altKey) return {text:e.key};
-    return /^[A-Za-z0-9]$/.test(e.key) ? {key: mods + e.key.toLowerCase()} : null;
-  }
-  return null;
-}
-$('#content').addEventListener('keydown', e => {
-  if (e.target.id !== 'chat-screen' || e.isComposing || e.metaKey) return;
-  if (e.ctrlKey && e.shiftKey && e.code === 'Space') {e.preventDefault(); e.target.blur(); return;}
-  if (e.ctrlKey && e.shiftKey) return;                         // browser shortcuts (copy, paste, devtools)
-  if (e.ctrlKey && e.key.toLowerCase() === 'v' && !e.altKey) return;  // let the paste event handle it
-  const k = chatKeyOf(e); if (!k) return;
-  e.preventDefault(); chatSend(k);
+  if (e.target.id!=='chat-start') return;
+  e.preventDefault(); const button=e.target.querySelector('[type="submit"]'); button.disabled=true; toast('Starting chat… the first start clones the project.');
+  try {const {session}=await chatApi({action:'chat_start',...Object.fromEntries(new FormData(e.target))}); $('#chat-tabs').dataset.sig=''; await chatConnect(session); chatTick();}
+  catch (err) {toast(err.message);} finally {button.disabled=false;}
 });
 $('#content').addEventListener('change', e => {if (e.target.id==='chat-image') {chatUpload(e.target.files[0]); e.target.value='';}});
 $('#content').addEventListener('paste', e => {
   const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));
-  if (f && ['chat-input','chat-screen'].includes(e.target.id)) {e.preventDefault(); chatUpload(f);}
-  else if (e.target.id==='chat-screen') {e.preventDefault(); const text=e.clipboardData?.getData('text'); if (text) chatSend({text:text.slice(0,2000),paste:true});}
-});
-$('#content').addEventListener('dragover', e => {if (e.target.closest('#chat-screen')) e.preventDefault();});
-$('#content').addEventListener('drop', e => {if (e.target.closest('#chat-screen')) {e.preventDefault(); chatUpload([...e.dataTransfer.files].find(x=>x.type.startsWith('image/')));}});
-setInterval(chatTick, 1000);
+  if (f && e.target.closest('#chat-term')) {e.preventDefault(); e.stopPropagation(); chatUpload(f);}
+}, true);
+$('#content').addEventListener('dragover', e => {if (e.target.closest('#chat-term')) e.preventDefault();});
+$('#content').addEventListener('drop', e => {if (e.target.closest('#chat-term')) {e.preventDefault(); chatUpload([...e.dataTransfer.files].find(x=>x.type.startsWith('image/')));}});
+setInterval(chatTick, 3000);
+$('#login-form').onsubmit = async e=>{
+  e.preventDefault(); const form=e.currentTarget, button=form.querySelector('[type="submit"]'); button.disabled=true;
+  try {await api('/api/login',{password:$('#login-password').value}); form.reset(); $('#login-dialog').close(); await poll();}
+  catch (err) {form.querySelector('.form-error').textContent=err.message;} finally {button.disabled=false;}
+};
 async function start() {
   updateSystemClock();
+  if (!['127.0.0.1','localhost'].includes(location.hostname)) {$('#where-chip').lastChild.textContent=' REMOTE'; $('#where-foot').lastChild.textContent=`Remote: ${location.hostname}`;}
   if(token) {try{await api('/api/session',{});token='';}catch(_){/* Bearer fallback if an older server does not support sessions. */}}
   await poll();setInterval(poll,1500);setInterval(()=>{updateCountdowns();updateSystemClock();},1000);
 }

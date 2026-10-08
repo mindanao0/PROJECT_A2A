@@ -13,18 +13,18 @@
 ```bash
 git clone https://github.com/mindanao0/PROJECT_NAVIS.git
 cd PROJECT_NAVIS
-python3 -m navis
+python3 -m navis --sim   # simulation; ไม่ใส่ --sim = runtime จริง (ดู README)
 ```
 
 ระบบเปิด browser พร้อม launch link ของ instance นั้น ถ้าเครื่องไม่เปิด browser อัตโนมัติ:
 
 ```bash
-python3 -m navis --no-browser
+python3 -m navis --sim --no-browser
 ```
 
 คัดลอก **link เต็มที่พิมพ์ใน terminal** ไปเปิดบน browser ของเครื่องเดียวกัน ห้ามแชร์ launch link เพราะมีสิทธิ์ควบคุม instance นั้นผ่าน token ใน fragment
 
-เลือก port ได้ แต่เลือก bind address ไม่ได้ (ล็อกเป็น `127.0.0.1`):
+เลือก port ได้ (โหมดจริง default 8765 จาก `[server] port`; simulation สุ่ม) แต่เลือก bind address ไม่ได้ (ล็อกเป็น `127.0.0.1`):
 
 ```bash
 python3 -m navis --port 8765
@@ -33,7 +33,7 @@ python3 -m navis --port 8765
 ใช้ state สำหรับทดลองแยกจาก state ปกติ:
 
 ```bash
-python3 -m navis --state-dir ~/.local/state/navis-demo
+python3 -m navis --sim --state-dir ~/.local/state/navis-demo
 ```
 
 Directory ต้องเป็นของผู้ใช้ปัจจุบันและ permission `0700`; path ที่ไม่ปลอดภัยจะถูกปฏิเสธ ไม่แก้ permission ของ directory เดิมอัตโนมัติ ข้อมูล default อยู่ใน `$XDG_STATE_HOME/navis` หรือ `~/.local/state/navis` เมื่อไม่ตั้งตัวแปร instance เดียวใช้ state dir ได้ครั้งละหนึ่งตัว
@@ -113,14 +113,15 @@ UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor 
 
 ## Local authorization boundary
 
-- HTTP bind `127.0.0.1` เท่านั้น; ไม่มี remote listener หรือ proxy endpoint
+- HTTP bind `127.0.0.1` เท่านั้น; เข้าจากเครื่องอื่นได้ทาง proxy บนเครื่องนี้ (`tailscale serve`, ดู `navis remote`) ซึ่งต้องตั้งรหัสผ่านก่อน (`navis passwd`) และ sign in ที่หน้า login: `POST /api/login` ตรวจ PBKDF2-SHA256 (600k รอบ) ทีละครั้ง ผิดแล้วหน่วง 1 วินาที สำเร็จได้ session cookie แบบเดียวกับ launch link (+`Secure` เมื่อผ่าน https)
 - API ทั้งอ่านและเขียนต้องมี per-launch random bearer token หรือ browser session cookie ของ instance ปัจจุบัน; session bootstrap ต้องใช้ bearer และ exact Origin, cookie อย่างเดียว bootstrap ไม่ได้
-- Host ต้องตรง `127.0.0.1:<port>`; ป้องกัน DNS rebinding
+- Host ต้องตรง `127.0.0.1:<port>`/`localhost:<port>` หรือชื่อใน `[server] hosts` (ที่ `navis remote` ใส่ให้); ป้องกัน DNS rebinding; ชื่อ remote ใช้ไม่ได้ถ้ายังไม่มีรหัสผ่าน
 - POST ต้องมี exact same Origin และ JSON content type; ไม่มี permissive CORS
 - ขนาด request ไม่เกิน 16 KiB; task/project/text มีขีดจำกัด
 - Static assets เป็น allowlist และมี CSP, no-store, no-referrer, frame-ancestors none
 - State dir `0700`, DB/launch file `0600`, advisory process lock ป้องกันสอง instance
-- ไม่มี endpoint สำหรับ shell, file access, push, merge หรือ deploy
+- ไม่มี endpoint สำหรับ shell, file access, push, merge หรือ deploy; Agent chat (`/api/chat/ws`) เป็น WebSocket เข้า tmux session `navis-chat-*` ที่ agent รันใน sandbox เท่านั้น (ต้องมี session + exact Origin)
+- CSP อนุญาต inline style (xterm.js เขียน `<style>` เอง) แต่ script/connect/img ยังเป็น `self` เท่านั้น
 
 Boundary นี้เป็น local single-user GUI foundation ไม่ได้พิสูจน์ production authentication ของ agent sockets เมื่อเพิ่ม sandbox/agent processes ต้องซ่อน control socket/transport จาก attempt และทำ authorization ตาม MVP Contract ห้ามเปิด remote ด้วยการแก้ bind addressเฉย ๆ
 
@@ -141,6 +142,7 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 | Real runtime controls | Banner เปลี่ยนตาม mode; REVIEW เปิด diff โดยตรงและแสดง approval; WAITING_INPUT แสดง input หรือแจ้งเมื่อ runtime ยังไม่ส่ง prompt; handoff เปิดเมื่อ `capabilities.handoff` ระบุพร้อมใช้งาน |
 | Integration (real) | งานที่ COMPLETED มีปุ่ม **Add to integration branch**: Runtime รวมผลบน `refs/navis/integration/<project>` และรัน check บน commit ที่รวมแล้ว; แถบ **Fast-forward <branch>** ในหน้า Overview/Task board เปิดเมื่อมี check ผ่านบน commit นั้นพอดี, working tree สะอาด และ branch ไม่ขยับ พร้อม dialog ยืนยัน (ไม่ push, ไม่รัน hooks) ไม่มีในโหมด simulation; ทดสอบด้วย `tests/gui-real-smoke.cjs` |
 | Model และ effort (real) | Settings มีแผง **Model and effort** ต่อ agent (Claude, Codex): ช่อง model (มีรายการแนะนำ รับ id อื่นที่รูปแบบถูกต้อง) และ effort ตามระดับที่ CLI นั้นรองรับ (Claude: low–max; Codex: low–ultra); ว่าง = ค่าเริ่มต้นของ CLI ใช้กับ attempt ที่เริ่มหลังบันทึก; ฟอร์มสร้างงานมีช่อง Model/Effort แบบเลือกได้เพื่อ override เฉพาะงานนั้น (ลำดับ: override ของงาน > การตั้งค่า > ค่าเริ่มต้นของ CLI); รายละเอียดงานแสดง model/effort ที่ใช้ CLI: `navis-cli agent-options [claude\|codex] [--model M] [--effort E]`, `navis-cli add --model --effort` |
+| Dependency, check ต่องาน, reviewer, usage (real) | ฟอร์มสร้างงานมี **Start after task** (งานรอจน task นั้น COMPLETED แล้วเริ่มจากผลของมัน) และ **Verified by** (ติ๊ก check ที่ใช้ตรวจเฉพาะงานนี้ สำหรับงานขนานที่ check ต้องใช้ไฟล์ของอีกฝั่ง; integrate ยังรันทุก check); รายละเอียดงานมี Review with Claude / Codex และ Continue with Codex / Claude (เปิดเมื่อ agent นั้น login), แสดง Verified by / Starts after, และแท็บ Attempts แสดง model·effort กับ token/ราคาที่ CLI เปิดเผยต่อ attempt; แถบ integration มีปุ่มรีวิวทั้งสอง agent; หน้า **Resources** มีตาราง Usage 24 ชั่วโมงต่อ agent × kind (ฟิลด์ที่ CLI ไม่เปิดเผยเป็น `-` ไม่ใช่ 0) |
 | Rollback, review ของ integration, revision, dependency (real) | แถบ integration มี **Discard** (ลบ integration branch; task ยัง COMPLETED) และ **Review with Claude** เมื่อ project ตั้ง `require_review` และ commit รวมยังไม่ได้รับ approve; งานที่ COMPLETED และถูกรีวิวว่า `changes` มี **Revise from review** (จำกัดรอบด้วย `limits.review_rounds`); งานที่รอ dependency แสดงเหตุผล `Waiting for task N` ใน queue reasons; สร้าง dependency ผ่าน CLI `add --after` หรือ bridge `after_task_id` (ยังไม่มีช่องในฟอร์ม) |
 | Provider/resource/settings | Agents อ่าน `providers` และ `cooldown_until`; Resources อ่าน `attempt.memory_bytes` หรือ `resources.attempt_memory_bytes`; Settings อ่าน `settings.editable/items` และส่ง `update_settings` เมื่อ runtime รองรับ |
 | Project setup | Add project เปิดใน real mode พร้อม path field และส่ง `create_project`; Runtime เป็นผู้ตรวจสิทธิ์และจัดเก็บ path |
@@ -149,13 +151,13 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 
 Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือมี navigation แบบเลื่อนแนวนอน, responsive panels, touch targets, skip link, live announcements และ task-evidence tabs ใช้ arrow-key navigation. ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก. Runtime รุ่นนี้ยังเป็น simulation จึงไม่มี agent log, provider prompt, real cgroup samples, real handoff หรือ config writer; UI จะแสดง unavailable/error ตามความสามารถที่ runtime รายงานและไม่สร้างค่า telemetry เอง
 
-## โหมด real (`python3 -m navis --real`)
+## โหมด real (`navis`, ค่าเริ่มต้น)
 
 GUI เดียวกัน แต่ขับ runtime จริงผ่าน `navis/bridge.py` (interface `snapshot` / `task_detail` / `command` เดียวกับ simulation) งานรันใน sandbox (bwrap + cgroup) บน clone ของ project ผลลง `refs/navis/attempts/*` ไม่มี endpoint ที่ merge/push
 
 | ส่วนของ UI | ข้อมูลจริงที่ bridge ส่ง |
 | --- | --- |
-| Poll (`/api/snapshot`) | task และ artifact เฉพาะ metadata (ชื่อ/kind/hash) ไม่มีเนื้อหา; `updated_at` ของ task ขยับเมื่อมี event ใหม่ UI จึงโหลดใหม่เมื่อจำเป็น |
+| Poll (`/api/snapshot`) | task และ artifact เฉพาะ metadata (ชื่อ/kind/hash) ไม่มีเนื้อหา; `updated_at` ของ task ขยับเมื่อมี event ใหม่หรือ agent เขียน output (งานที่วิ่งอยู่จึงอัปเดต Agent output สด); งาน RUNNING มี `running_since`/`last_output` ให้การ์ดแสดงเวลาที่วิ่งและเงียบไปนานเท่าไร |
 | Task evidence (`/api/tasks/<id>`) | full patch (`git diff base head` ตัดที่ 200,000 ตัวอักษร) พร้อม `files[]` แยก `out_of_scope`/`protected`; `agent.log` (ท้าย 30,000 ไบต์) และ prompt จริงของ attempt ล่าสุด (redact credential แล้ว); output เต็มของ check/prepare |
 | Agents | `providers[]` พร้อมสถานะ login, slot และ `cooldown_until` จาก quota จริง |
 | Resources | slot ที่ใช้/ทั้งหมด และ `memory_bytes` ของ attempt ที่กำลังรัน อ่านจาก `memory.current` ของ cgroup |
@@ -165,6 +167,8 @@ GUI เดียวกัน แต่ขับ runtime จริงผ่าน
 | Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ codex login ใน agent home ของ Navis |
 | REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
 | Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
+| Apply to my folder | `git apply` ผลของงาน (`base..head`) ลง working tree ของ project แบบ uncommitted; all-or-nothing: ถ้างานของคุณแก้บรรทัดเดียวกันจะไม่เขียนอะไร; บันทึก event `applied` (`auto_apply = true` ในไฟล์ project = ทำเองหลังผ่าน checks) |
+| Agent chat | terminal จริง (xterm.js ที่โหลดเมื่อเปิดหน้า chat) ต่อ WebSocket กับ `tmux attach` บน pty; เลือก Claude Code, Codex หรือ Shell (bash ใน sandbox เดียวกัน); ขนาดตามหน้าจอ, wheel เลื่อนย้อน, ลากเลือก = copy ลง clipboard (OSC 52 จาก tmux), Ctrl+Shift+V = paste, ปุ่ม Esc/Tab/↑↓/Ctrl-C สำหรับมือถือ; วาง/ลากรูปเพื่อแนบ |
 
 ข้อจำกัด: adapter ของ Codex/Claude ยังไม่ผ่าน probe จริง; `gui-smoke.cjs` แก้ selector/ข้อความที่ UI เปลี่ยนไปแล้วและผ่านบน Chromium headless (2026-10-06, โหมด simulation เท่านั้น; ยังไม่ครอบคลุมโหมด real)
 

@@ -2,34 +2,75 @@
 
 ระบบกลางสำหรับให้ AI หลายตัวทำงานเป็นทีมในหลายโปรเจกต์ โดยมีเป้าหมายหลักคือให้ ChatGPT/Codex, Claude Code และ Local LLM สามารถคุย วิเคราะห์ แบ่งงาน ตรวจงาน และส่งผลลัพธ์หากันได้โดยไม่ต้องใช้ไฟล์ handoff เป็นช่องทางหลัก
 
-> สถานะ: **Design + Local GUI Foundation** — ยืนยันคำตัดสินแล้ว 13 ข้อ; เปิด GUI ที่ใช้ in-process fake-agent simulation ได้ด้วย `python3 -m navis` ยังไม่มี production Agent Runner หรือ adapter จริง Boundary probes ที่ไม่ใช้ quota ผ่านแล้ว (`probes/boundary.sh`) แต่ adapter probes ยังไม่ได้ทดสอบ
+> สถานะ: runtime จริงใช้งานได้ (sandbox bwrap + cgroup, fake/claude/codex/local agent, integration branch) ผ่าน `navis` ทั้ง CLI และ GUI; adapter ของ claude/codex ยังไม่ผ่าน probe เต็มชุด
 
-## เปิด UI/GUI
+## เริ่มใช้งาน
 
-ต้องใช้ Linux + Python 3.11 ขึ้นไป ไม่มี runtime dependencies เพิ่ม:
-
-```bash
-python3 -m navis
-```
-
-เปิด local launch link ที่พิมพ์ใน terminal เพื่อเข้า UI ธีม **Cybernetics ดำ–แดง**: Control room, Task board, Agents, Activity log, Artifacts, Resources และ Runtime settings การ์ดแสดงเหตุผลรอคิวและ countdown; เลือกงานที่เสร็จแล้วเป็นต้นทางได้; Stop/Kill มีหน้าต่างยืนยัน และ refresh หน้าแล้ว session ยังใช้ได้ สร้างงานและทดลอง controls ผ่าน simulation ได้ งานจำลองไม่อ่านหรือแก้ repository และไม่เรียก Codex/Claude/Local LLM จริง
-
-### โหมด real (runtime จริง)
+ต้องใช้ Linux + Python 3.11 ขึ้นไป ไม่มี dependency เพิ่ม ติดตั้งครั้งเดียวแล้วพิมพ์ `navis` ได้จากทุก folder:
 
 ```bash
-python3 -m navis --real
+python3 -m pip install --user -e ~/code/PROJECT_NAVIS
 ```
 
-GUI เดียวกันแต่ขับ runtime จริง: งานรันใน sandbox (bwrap + cgroup) ผลลง `refs/navis/attempts/*` ไม่ merge/push ให้ ต้องมี project config ที่ `~/.config/navis/projects/<ชื่อ>.toml` ([ตัวอย่าง](docs/EXECUTION_DESIGN.md)) agent `fake` ใช้ทดสอบได้ทันทีโดยไม่ใช้ quota ส่วน `codex` / `claude` ต้อง login agent home ของ Navis ก่อน (แยกจาก login ปกติ) และ adapter ทั้งสองยังไม่ผ่าน probe จริง:
+ใช้งานประจำ (อยู่ใน folder ของ repo ไม่ต้องใส่ `-p`):
+
+```bash
+cd ~/code/PROJECT_VELA
+navis init                          # ทำ repo นี้เป็น project (ใส่คำสั่ง test ใต้ [checks] ในไฟล์ที่มันบอก)
+navis doctor                        # เช็ค sandbox, login ของ agent และ checks ก่อนใช้จริง
+navis add "แก้ error ตอน password ว่าง" -f   # สั่งสั้นๆ ได้; -f = ดู agent ทำงานสด (default agent: claude)
+navis ls                            # งานที่วิ่งอยู่บอกว่าวิ่งมานานเท่าไร และ output ล่าสุดกี่วินาทีก่อน
+navis apply 12                      # เอาผลงานลง folder จริงของ project (uncommitted, ทับงานคุณไม่ได้)
+navis chat                          # คุยกับ claude ใน sandbox (tmux)
+navis                               # เปิด GUI (ถ้ารันอยู่แล้วจะเปิดตัวเดิม)
+```
+
+- ผลงานยังเข้า `refs/navis/attempts/*` เหมือนเดิม และเลือกลง folder จริงได้: ปุ่ม **Apply to my folder** ใน GUI, `navis apply ID` หรือใส่ `auto_apply = true` ในไฟล์ project ให้ลงเองทุกงานที่ผ่าน checks; ถ้าคุณแก้บรรทัดเดียวกันอยู่ มันจะไม่เขียนอะไรเลย
+- Agent chat ใน GUI เป็น terminal จริง (xterm.js ต่อ WebSocket เข้า tmux) พิมพ์แล้วเห็นทันที สีและเมนูเหมือน terminal ปุ่ม Esc/Tab/↑↓/Ctrl-C มีให้กดบนมือถือ
+- Agent chat มีตัวเลือก **Shell**: bash ธรรมดาใน sandbox เดียวกัน (clone ของ project, folder `rw`, มีเน็ต; ไม่เห็น home/ไฟล์อื่นของคุณ) ใช้ได้เหมือน terminal ปกติ: ปุ่มทุกปุ่ม สี resize, ลากเลือกข้อความ = copy ลง clipboard, **Ctrl+Shift+V** = paste (Ctrl+V ส่งให้โปรแกรมเหมือน terminal บน Linux), wheel เลื่อนย้อน
+- Agent ค้นเว็บและอ่านหน้าเว็บได้ (Claude: WebSearch/WebFetch, Codex: `--search`) แต่คำสั่งที่มันรันและ checks ยังไม่มีเน็ต ปิดได้ด้วย `[agents] web = false` ใน `~/.config/navis/config.toml`
+- แก้ไฟล์นอก project: ใส่ใน `~/.config/navis/projects/<ชื่อ>.toml`
+
+  ```toml
+  [sandbox]
+  rw = ["~/notes", "/data/shared"]   # agent แก้ได้ตรงๆ (ไม่ผ่าน diff/review และ Navis ย้อนไม่ได้)
+  ```
+
+  ใช้ได้ทั้งงานและ chat; ห้าม home ทั้งก้อน, state ของ Navis, ตัว repo เอง และ folder credential เช่น `~/.ssh`
+- Agent fleet (หน้า Overview) แสดง limit ที่เหลือของ subscription ช่วง 5 ชม. และรายสัปดาห์ของ Claude/Codex เป็น % (provider ไม่บอกเป็นจำนวน token): Claude อ่านสดทุกนาทีขณะ login ของมันยังไม่หมดอายุ (อายุ 8 ชม. หลัง Claude รันครั้งล่าสุด) นอกนั้นแสดงค่าล่าสุด; Codex เป็นค่าหลัง turn ล่าสุดที่รันผ่าน Navis
+- งานที่กำลังวิ่ง: การ์ดและหน้า task บอก “running 3m · last output 5s ago” และเปิดแท็บ Agent output ให้เองซึ่งอัปเดตสด; เงียบเกิน 5 นาทีจะเตือนให้เข้าไปดู
+
+### ให้รันตลอด (ทำเครื่องนี้เป็น server)
+
+```bash
+navis service install       # systemd user service: GUI + runner อยู่ที่ http://127.0.0.1:8765 ไม่ต้องเปิด terminal ค้าง
+loginctl enable-linger      # ครั้งเดียว: รันต่อหลัง logout และเริ่มเองตอนเปิดเครื่อง
+journalctl --user -u navis -f   # ดู log;  navis service remove = เอาออก
+```
+
+### เข้าจากเครื่องอื่น / มือถือ ต่าง network ได้
+
+ใช้ Tailscale (เครื่องนี้กับ iPhone อยู่ใน tailnet เดียวกันแล้ว) ไม่เปิดสู่ internet สาธารณะ:
+
+```bash
+navis passwd    # ตั้งรหัสผ่านหน้า login (ต้องมีก่อนเปิด remote)
+navis remote    # tailscale serve → https://<ชื่อเครื่อง>.<tailnet>.ts.net ; navis remote --off = ปิด
+```
+
+ครั้งแรก `tailscale serve` อาจขอให้เปิด HTTPS ของ tailnet (มันพิมพ์ลิงก์ให้) หรือบอก access denied ให้รัน `sudo tailscale set --operator=$USER` ครั้งเดียว Navis ยัง bind แค่ `127.0.0.1` เสมอ; ชื่อ remote ใช้ได้เฉพาะเมื่อมีรหัสผ่าน
+
+### Agent ที่ใช้ได้
+
+`fake` ใช้ทดสอบได้ทันทีโดยไม่ใช้ quota ส่วน `codex` / `claude` ต้อง login agent home ของ Navis ก่อน (แยกจาก login ปกติ; `navis doctor` บอกว่ายังขาดอะไร):
 
 ```bash
 CLAUDE_CONFIG_DIR=~/.local/share/navis/agents/claude claude auth login
 CODEX_HOME=~/.local/share/navis/agents/codex codex login --device-auth
 ```
 
-`navis-cli add|ls|show|run|stop|answer|approve|reject` ใช้คิวงานจาก terminal ได้เช่นกัน และใช้ฐานข้อมูลเดียวกับ GUI
+`navis --sim` เปิด GUI แบบ simulation (fake agent ในหน่วยความจำ ไม่แตะ repo) สำหรับลอง controls; `navis -h` ดูคำสั่งทั้งหมด (`navis-cli` ยังใช้ได้เหมือน `navis`)
 
-วิธีติดตั้ง การใช้งาน controls, authentication, persistence, ข้อจำกัดและผลทดสอบ: [Local GUI Guide](docs/GUI.md)
+วิธีใช้ controls ใน GUI, authentication, persistence และข้อจำกัด: [Local GUI Guide](docs/GUI.md)
 
 ## ขอบเขต MVP ที่ยืนยันแล้ว
 
@@ -37,7 +78,7 @@ CODEX_HOME=~/.local/share/navis/agents/codex codex login --device-auth
 - Linux first
 - Coding agent อ่าน–แก้โค้ด–รันทดสอบได้ภายใน assigned workspace ตามสิทธิ์ที่บังคับใช้จริง
 - Local LLM เริ่มจากสรุป context และวิเคราะห์ log; เพิ่ม coding หลัง Agent Runner ผ่านการทดสอบและอนุญาตบทบาทนั้น
-- UI บนเครื่องเดียวก่อน โดยเตรียม authentication/authorization boundary สำหรับ remote; ยังไม่เปิด remote listener
+- UI bind แค่ `127.0.0.1`; เข้าจากเครื่องอื่นผ่าน `tailscale serve` + รหัสผ่าน (`navis remote`)
 - ผู้ใช้คนเดียว, project แรกคือ PROJECT_VELA, ใช้ subscription แผน 20 USD
 - เป้าหมายหลัก: แบ่งงานชัด ไม่ทับกัน ไม่ทำซ้ำ และแบ่งทรัพยากรเครื่อง
 

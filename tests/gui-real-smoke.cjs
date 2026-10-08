@@ -15,7 +15,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   fs.writeFileSync(path.join(proj, 'src/a.py'), 'a = 1\n');
   git('init', '-q', '-b', 'main'); git('add', '-A'); git('commit', '-qm', 'init');
   fs.writeFileSync(path.join(root, 'cfg/projects/demo.toml'), `path = "${proj}"\nprotected = []\n[checks]\nok = "true"\n`);
-  const server = spawn(process.env.PYTHON || 'python3', ['-m', 'navis', '--real', '--no-browser', '--state-dir', state],
+  const server = spawn(process.env.PYTHON || 'python3', ['-m', 'navis', '--port', '0', '--no-browser', '--state-dir', state],
     {stdio: 'ignore', env: {...process.env, NAVIS_HOME: path.join(root, 'home'), NAVIS_CONFIG: path.join(root, 'cfg')}});
   let browser;
   try {
@@ -26,8 +26,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(url);
     await page.getByRole('button', {name: '+ New task', exact: true}).click();
-    await page.getByLabel('Task title', {exact: true}).fill('Add x');
-    await page.getByLabel('Task description', {exact: true}).fill(
+    await page.getByLabel('Title (optional)', {exact: true}).fill('Add x');
+    await page.getByLabel('What should the agent do?', {exact: true}).fill(
       '[[step]]\ndo = "edit"\npath = "src/x.py"\ntext = "x = 1\\n"\n[[step]]\ndo = "mcp"\ntool = "report_result"\nargs = {status = "done", summary = "ok"}\n');
     await page.locator('#task-agent').selectOption('fake');
     await page.getByRole('button', {name: 'Create task →', exact: true}).click();
@@ -56,6 +56,22 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.notEqual(git('rev-parse', 'HEAD').trim(), before);
     assert.equal(git('show', 'HEAD:src/x.py'), 'x = 1\n');
     assert.equal(git('status', '--porcelain').trim(), '');
+    // A dependent task verified by one check, created from the form; the usage view lists the finished attempts.
+    await page.getByRole('button', {name: '+ New task', exact: true}).click();
+    await page.getByLabel('Title (optional)', {exact: true}).fill('Add y after x');
+    await page.getByLabel('What should the agent do?', {exact: true}).fill(
+      '[[step]]\ndo = "edit"\npath = "src/y.py"\ntext = "y = 1\\n"\n[[step]]\ndo = "mcp"\ntool = "report_result"\nargs = {status = "done", summary = "ok"}\n');
+    await page.locator('#task-agent').selectOption('fake');
+    await page.locator('#task-after').selectOption({index: 1});
+    await page.locator('#task-checks-list input[value="ok"]').check();
+    await page.getByRole('button', {name: 'Create task →', exact: true}).click();
+    await page.locator('#task-detail').getByText('Starts after').waitFor();
+    await page.locator('#task-detail').getByText('Verified by').waitFor();
+    await page.locator('#task-detail .badge.completed').waitFor({timeout: 60000});
+    await page.locator('#detail-dialog').getByRole('button', {name: 'Close task details', exact: true}).click();
+    await page.locator('.sidebar [data-view="resources"]').click();
+    await page.getByText('Usage, last 24 hours').waitFor();
+    assert(await page.locator('.usage-table').innerText().then(x => x.includes('fake') && x.includes('implement')), 'usage table lists the fake attempts');
     // Model and effort: set in Settings, saved to config.toml, offered again after a reload.
     await page.locator('.sidebar [data-view="settings"]').click();
     await page.locator('#agent-options-form [name="claude_model"]').fill('haiku');
