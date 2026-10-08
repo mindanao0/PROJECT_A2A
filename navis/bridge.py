@@ -23,6 +23,8 @@ PROVIDERS = (("fake", "Fake agent", "Scripted test agent, sandboxed, no quota"),
              ("local", "Local model", "Local coding agent over a loopback model (tools: files + checks, no shell)"))
 SETTINGS = (("slots.fake", "Fake agent slots", 1, 8), ("slots.codex", "Codex slots", 1, 4), ("slots.local", "Local model slots", 1, 2),
             ("slots.claude", "Claude Code slots", 1, 4), ("limits.attempt_timeout", "Attempt timeout (seconds)", 60, 86400))
+HANDOFFS = {"review_with_claude": ("review", "claude"), "review_with_codex": ("review", "codex"),
+            "continue_with_codex": ("continue", "codex"), "continue_with_claude": ("continue", "claude")}
 MAX_DIFF, MAX_LOG, MAX_PROMPT, MAX_DIFFS = 200_000, 30_000, 20_000, 64
 KINDS = {"status": "STATE", "attempt": "ATTEMPT", "tool": "TOOL", "check": "CHECK", "prepare": "PREPARE",
          "outcome": "OUTCOME", "error": "ERROR", "control": "CONTROL", "instruction": "INSTRUCTION",
@@ -111,7 +113,7 @@ class Bridge:
             except Exception as e:  # a broken config must not hide the other projects
                 out.append({"id": f.stem, "name": f.stem, "path": "invalid", "description": f"Config error: {e}"[:200]})
                 continue
-            out.append({"id": f.stem, "name": f.stem, "path": p["path"],
+            out.append({"id": f.stem, "name": f.stem, "path": p["path"], "checks": list(p["checks"]),
                         "description": f"{len(p['checks'])} check(s) / protected: {', '.join(p['protected']) or 'none'}"})
         return out
 
@@ -278,7 +280,8 @@ class Bridge:
                        "expires": t["updated"] + 86400, "payload_hash": "",
                        "options": runtime.ask_options(self.store, tid) if state == "WAITING_INPUT" else []}
         return {
-            "model": t["model"], "effort": t["effort"], "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
+            "model": t["model"], "effort": t["effort"], "checks": json.loads(t["checks"]) if t["checks"] else None,
+            "kind": t["kind"] or "task", "after": str(t["after"]) if t["after"] is not None else None, "round": t["round"], "reviews": [r | {"stale": r["commit"] != t["head"]} for r in c["reviews"].get(tid, [])],
             "id": str(tid), "project_id": t["project"], "title": t["title"] or t["spec"][:80], "spec": t["spec"],
             "scope": json.loads(t["scope"]), "scenario": "real", "state": state, "backend": t["agent"],
             "attempt_id": aid, "pending": pending, "queue_reasons": reasons, "head": t["head"],
@@ -289,7 +292,9 @@ class Bridge:
             "source": json.loads(t["source"]) if t["source"] else None,
             "attempts": [{"id": a["id"], "started_at": a["started"], "ended_at": a["ended"], "backend": t["agent"],
                           "state": "RUNNING" if a["status"] == "running" else (a["outcome"] or "RUNNING"),
-                          "memory_bytes": memory_bytes(a["unit"]) if a["status"] == "running" else None}
+                          "memory_bytes": memory_bytes(a["unit"]) if a["status"] == "running" else None,
+                          "model": a["model"], "effort": a["effort"], "prompt_bytes": a["prompt_bytes"],
+                          "usage": json.loads(a["usage"]) if a["usage"] else None}
                          for a in c["attempts"].get(tid, [])],
             "instructions": [{"version": i + 1, "text": json.loads(e["data"])["text"], "time": e["at"]}
                              for i, e in enumerate(c["instr"].get(tid, []))],
@@ -320,13 +325,21 @@ class Bridge:
                 "tasks": [self.task_view(t, c, False) for t in c["rows"]],
                 "events": [self.event(r, proj_of, False) for r in evs],
                 "cursor": evs[-1]["id"] if evs else cursor, "latest_cursor": last,
-                "integration": self.integration(), "agent_options": self.agent_options(),
+                "integration": self.integration(), "agent_options": self.agent_options(), "usage": self.usage(),
                 "providers": self.providers(c["busy"], c["cool"]), "settings": self.settings(),
                 "resources": {"slots": [{"backend": n, "used": c["busy"].get(n, 0), "limit": slots.get(n, 1)} for n in names],
                               "memory_available": True, "mode": "real"},
                 "capabilities": {"fake": "scripted, sandboxed", "codex": "unverified", "claude": "unverified", "local": "not connected",
                                  "controls": {"graceful_stop": False},
-                                 "handoff": {"claude_review": self.logged_in("claude"), "codex_continue": self.logged_in("codex")}}}
+                                 "handoff": {"claude_review": self.logged_in("claude"), "codex_continue": self.logged_in("codex"),
+                                            "codex_review": self.logged_in("codex"), "claude_continue": self.logged_in("claude")}}}
+
+    def usage(self, hours=24):
+        """What attempts cost in the last day, per agent and kind (OD-012): only what the CLIs exposed."""
+        rep = usage.report(self.store, time.time() - hours * 3600)
+        return [{"agent": a, "kind": k, **{f: r[f] for f in ("attempts", "outcomes", "seconds", "prompt_bytes", "input", "cached",
+                                                              "output", "cost_usd", "with_usage", "settings")}}
+                for (a, k), r in rep.items()]
 
     def agent_options(self):
         """Per agent: the configured model/effort ('' = the CLI default) and what the GUI may offer."""
@@ -494,8 +507,9 @@ class Bridge:
             except (ValueError, subprocess.CalledProcessError) as e:
                 raise ControlError(str(e)[:600])
             out, ok = {"ok": True, "message": f"Written into your project folder (uncommitted): {', '.join(files)}"[:300]}, True
-        elif action in ("review_with_claude", "continue_with_codex"):
-            out = self.hand_off(t, aid, "claude" if action == "review_with_claude" else "codex")
+        elif action in HANDOFFS:
+            mode, agent = HANDOFFS[action]
+            out = self.hand_off(t, aid, agent, mode)
             ok = True
         else:
             raise ControlError("Unknown command")
@@ -547,15 +561,15 @@ class Bridge:
         threading.Thread(target=work, daemon=True).start()
         return {"ok": True, "message": "Running every check on the integration commit. Watch the activity log."}
 
-    def hand_off(self, t, aid, agent):
+    def hand_off(self, t, aid, agent, mode):
         if t["status"] != "COMPLETED" or not t["head"]:
             raise ControlError("Only a completed task with a result can be handed off")
         if not self.logged_in(agent):
             raise ControlError(f"{agent} is not logged in")
         title = t["title"] or t["spec"][:60]
-        if agent == "claude":  # an independent, read-only review of this exact result
+        if mode == "review":  # an independent, read-only review of this exact result
             try:
-                rid, dup = runtime.request_review(self.store, t["id"], "claude")
+                rid, dup = runtime.request_review(self.store, t["id"], agent)
             except ValueError as e:
                 raise ControlError(str(e))
             return {"task_id": str(dup or rid), "duplicate": bool(dup)}
@@ -582,6 +596,11 @@ class Bridge:
                       "artifacts": [{"name": "result commit", "hash": old["head"]}]}
         if not isinstance(base, str) or base.startswith("-") or len(base) > 200:
             raise ControlError("Invalid base")
+        checks = p.get("checks")
+        if checks in (None, "", []):
+            checks = None
+        elif not isinstance(checks, list) or not all(isinstance(c, str) for c in checks):
+            raise ControlError("Checks must be a list of check names")
         after = p.get("after_task_id")
         if after not in (None, ""):
             if not str(after).isdigit():
@@ -592,7 +611,7 @@ class Bridge:
         try:
             tid, dup = runtime.add_task(self.store, project, p.get("agent") or "fake",
                                         clean_text(p.get("spec"), "Task description"), normalize_scope(p.get("scope")),
-                                        base, clean_text(p.get("title"), "Title", 120), source, after=after,
+                                        base, clean_text(p.get("title"), "Title", 120), source, after=after, checks=checks,
                                         model=str(p.get("model") or "") or None, effort=str(p.get("effort") or "") or None)
         except (ValueError, subprocess.CalledProcessError) as e:
             raise ControlError(f"Cannot queue task: {e}"[:300])

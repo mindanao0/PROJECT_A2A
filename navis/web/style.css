@@ -343,6 +343,21 @@ kbd { display: inline-block; padding: 2px 5px; border: 1px solid #713131; border
 .strip-actions { display: flex; gap: 9px; margin-left: auto; flex-wrap: wrap; }
 .strip-actions button { margin-left: 0; }
 
+/* Task form: dependency and per-task checks */
+#task-checks { margin: 0; padding: 0; border: 0; min-width: 0; }
+#task-checks legend { padding: 0; margin-bottom: 7px; font-size: 14px; font-weight: 600; }
+#task-checks-list { display: flex; flex-wrap: wrap; gap: 8px 16px; padding-top: 4px; }
+.inline-check { display: inline-flex; align-items: center; gap: 7px; margin: 0; font-weight: 400; }
+.inline-check input { width: 16px; height: 16px; margin: 0; }
+#task-flow-row { align-items: start; }
+#agent-options-form fieldset { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #3a2a30; }
+#agent-options-form legend { padding: 0 6px; font-size: 13px; font-weight: 600; }
+
+/* Usage table */
+.usage-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+.usage-table th { text-align: left; font-weight: 600; color: #b9a8ad; padding: 8px 10px; border-bottom: 1px solid #3a2a30; white-space: nowrap; }
+.usage-table td { padding: 9px 10px; border-bottom: 1px solid #231a1e; vertical-align: top; }
+.usage-table tbody tr:last-child td { border-bottom: 0; }
 /* Agent chat */
 .chat-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 .chat-bar input { flex: 1; min-width: 200px; margin: 0; }
