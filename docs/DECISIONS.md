@@ -37,6 +37,12 @@
 | D-024 | Adapter/agent รันเป็น child process ใน sandbox ของ attempt | ไม่มีระบบ plugin จากภายนอก (OD-014) |
 | D-025 | Lifecycle/controls ตามที่ implement ใน Runtime | ช่องว่างกับ MVP Contract ที่รู้แล้วอยู่ใน OD-023 |
 | D-026 | Local backend คือ Ollama บน loopback, โมเดลเริ่มต้น `qwen2.5-coder:7b`; local coding คงปิด | ประเมินใหม่เมื่อมีโมเดล/ฮาร์ดแวร์ที่ดีกว่า (OD-022, Phase 4) |
+| D-027 | Protocol ภายในเป็น native schema; ทำ A2A bridge เมื่อมี external agent เท่านั้น | ต้องเพิ่ม schema_version/correlation id ใน event ก่อนทำ bridge (OD-005) |
+| D-028 | ยังไม่สร้าง Context Broker | กลับมาดูเมื่อ prompt ของ Axon เป็นสัดส่วนสำคัญของ token ในงานจริง; เริ่มจาก deterministic Git/file retrieval (OD-009) |
+| D-029 | Roles แบบ hybrid: ค่าเริ่มต้นใน config, เลือก agent/model/effort ต่องานได้, บทบาทมาจากชนิดงาน | ไม่สร้าง capability matching อัตโนมัติจนกว่าจะมีข้อมูล (OD-011) |
+| D-030 | Remote ผ่าน Tailscale (`axon remote`) พร้อมรหัสผ่านเท่านั้น; Axon bind แค่ loopback | ห้ามเปิดออก internet สาธารณะ; token ต่อเครื่องและระดับสิทธิ์เป็นงานค้าง (OD-015) |
+| D-031 | Session ต่อ attempt สำหรับงาน; ความต่อเนื่องมาจาก git snapshot และโน้ตใน prompt | งานที่ต้องคุยต่อเนื่องใช้ Chat (OD-016) |
+| D-032 | ไม่สร้าง Team/Debate; ใช้ implement → review → revise ที่จำกัดรอบ | ถ้าสร้างในอนาคต ใช้ verifier + ผู้ใช้ตัดสิน ไม่ใช้ majority vote อย่างเดียว (OD-017) |
 
 ## ข้อเสนอที่ยังไม่ได้ล็อก
 

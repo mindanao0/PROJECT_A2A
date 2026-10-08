@@ -2,7 +2,7 @@
 
 เอกสารนี้เก็บสิ่งที่ **ยังไม่ได้ตัดสินใจ** และสถานะคำตัดสินที่เกี่ยวข้อง รายการที่ยืนยันแล้วอ้าง [Confirmed Decisions](DECISIONS.md); ข้อเสนอ acceptance อยู่ใน [MVP Contract](MVP_CONTRACT.md)
 
-สถานะ (2026-10-08): ยังเปิดอยู่ OD-005, OD-009, OD-011, OD-015, OD-016, OD-017, OD-019; นโยบายตัดสินแล้วแต่ enforcement ยังค้าง: OD-013 และช่องว่างที่รู้แล้วใน OD-023 ส่วน UI, transport, storage และ sandbox ตัดสินแล้วตามที่ implement (D-015–D-026)
+สถานะ (2026-10-08): ยังเปิดอยู่ OD-019 (รออ่านเงื่อนไขของ provider จากต้นฉบับ); นโยบายตัดสินแล้วแต่ enforcement ยังค้าง: OD-013 และช่องว่างที่รู้แล้วใน OD-023 และ OD-015 ข้ออื่นตัดสินแล้ว (D-015–D-032) บางข้อเป็นคำตัดสินว่า "ยังไม่สร้าง" พร้อมเงื่อนไขที่จะกลับมาดูใหม่
 
 ## OD-001 Core implementation language — RESOLVED
 
@@ -27,14 +27,11 @@ D-016:
 D-017: SQLite (stdlib `sqlite3`, WAL) เป็น state หลัก: ตาราง `tasks`, `attempts`, `events`, `meta`, `cooldowns` (`axon/store.py`); การเปลี่ยนสถานะเป็น compare-and-set และบันทึก event ทุกครั้ง (`Store.move`)
 ข้อมูลใหญ่ของ attempt (log ของ agent, prompt, bundle) เป็นไฟล์ใน `~/.local/share/axon/attempts/<id>/` และลบตาม retention (`axon-cli gc`)
 
-## OD-005 Protocol compatibility
+## OD-005 Protocol compatibility — RESOLVED
 
-Internal protocol จะ:
-- เป็น native schema แล้วทำ A2A bridge
-- ใช้ A2A-compatible schema ตั้งแต่แรก
-- รองรับ A2A เฉพาะ external agents ในภายหลัง
-
-ยังไม่ควรตัดสินจน prototype lifecycle กับ Codex/Claude/Local ได้ก่อน
+D-027: native schema (tasks/attempts/events ใน SQLite และ MCP tools ของ Axon สำหรับ agent) ไม่ใช้ A2A-compatible schema ตั้งแต่แรก
+ทำ A2A bridge เมื่อต้องต่อ agent ที่ไม่ได้รันผ่าน CLI บนเครื่องนี้เท่านั้น ก่อนทำต้องเพิ่ม schema_version / correlation id / producer sequence ใน event (ช่องว่างข้อ 3 ของ OD-023)
+เหตุผล: lifecycle กับ Codex/Claude/Local พิสูจน์แล้ว (Phase 1b–4) และยังไม่มี external agent ให้ต่อ (Phase 5 ไม่พบ use case)
 
 ## OD-006 Agent backend integration — RESOLVED
 
@@ -59,30 +56,27 @@ D-014: ผู้ใช้เป็นผู้สั่ง; Runtime รวมง
 เหตุผล: เกณฑ์ Phase 2 (evidence ผูก exact commit, stale เมื่อ rebase) ทำได้ก็ต่อเมื่อ Runtime เป็นคนสร้าง integration commit; ปลายทางเป็น branch ของ Axon จึงไม่แตะ working tree ของผู้ใช้
 เลื่อนไปก่อน: verifier + policy auto-merge (ต้องมีหลักฐานว่า verifier ตรงกับการตัดสินของผู้ใช้พอก่อน) และ config `merge` per project (เพิ่มเมื่อมีโหมดที่สองจริง)
 
-## OD-009 Context Broker implementation
+## OD-009 Context Broker implementation — RESOLVED (ยังไม่สร้าง)
 
-ต้องเลือกว่าจะเริ่มด้วย:
-- deterministic Git/file retrieval
-- search index
-- embeddings
-- Local LLM selection
-- hybrid
+D-028: ยังไม่สร้าง Context Broker
+**หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Axon ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI อ่านไฟล์เองและ overhead ของ CLI ครองส่วนใหญ่) ลดได้มากสุดเท่านั้น
 
-ไม่ควรเริ่มด้วยระบบ memory ซับซ้อนเกินจำเป็น
-
-**หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Axon ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI overhead ครองส่วนใหญ่) ข้อเสนอ: ยังไม่สร้าง Context Broker; เมื่อต้องการ ให้เริ่มจาก deterministic Git/file retrieval และวัดซ้ำด้วย `axon-cli usage` กับงานจริงที่ prompt ใหญ่ — ยังไม่ใช่คำตัดสินของผู้ใช้
+กลับมาดูเมื่อ: `axon-cli usage` กับงาน VELA จริงแสดงว่า PROMPT KB เป็นสัดส่วนสำคัญของ IN TOK (ราว 20% ขึ้นไป)
+เมื่อสร้าง ให้เริ่มจาก deterministic Git/file retrieval (เลือกไฟล์จาก diff/scope) ไม่เริ่มจาก search index, embeddings หรือระบบ memory ที่ซับซ้อน แล้ววัดซ้ำด้วย `axon-cli usage`
 
 ## OD-010 Project configuration format — RESOLVED
 
 D-020: TOML นอก repo: `~/.config/axon/config.toml` (ทั้งระบบ) และ `~/.config/axon/projects/<project>.toml` (ต่อ project; ตัวอย่างใน [Execution Design](EXECUTION_DESIGN.md) §9) ไม่มีส่วนไหน commit ลง repo ของ project (D-007)
 ไฟล์คำสั่งที่ repo มีอยู่แล้ว (`CLAUDE.md`, `AGENTS.md`) เป็นข้อมูลของ project ตาม OD-013 ไม่ใช่ config ของ Axon
 
-## OD-011 Agent identity and roles
+## OD-011 Agent identity and roles — RESOLVED
 
-Roles เป็น:
-- static config
-- dynamically assigned per task
-- hybrid
+D-029: hybrid ตามที่ implement:
+- ค่าเริ่มต้นอยู่ใน config: agent เริ่มต้นของงานคือ claude; model/effort ต่อ agent อยู่ที่ `[agents]` ใน `config.toml`
+- เลือกต่องานได้: `add -a/--agent`, `--model`, `--effort` หรือช่องในฟอร์มสร้างงาน
+- บทบาทกำหนดจากชนิดงาน ไม่ใช่จากตัว agent: reviewer คืองานชนิด `review` ที่ได้ tools แบบอ่านอย่างเดียว; local coding ต้องเปิดเองด้วย `[local] coding = true` (D-026)
+
+ไม่สร้างการจับคู่งานกับ agent อัตโนมัติ (capability matching) จนกว่าจะมีข้อมูลจาก `axon-cli usage` หรือ `probes/bench.py` ว่า agent ไหนเหมาะกับงานแบบไหน
 
 ## OD-012 Cost/usage accounting — RESOLVED
 
@@ -123,34 +117,38 @@ D-024: child process ใน sandbox: agent CLI, MCP server ของ Axon (`axon
 adapter ใน `runtime.py` เป็นแค่ฟังก์ชันที่สร้าง argv/env อยู่ในโค้ดของ Axon เอง ไม่โหลดโค้ดจากภายนอก
 ยังไม่มีระบบ plugin จากภายนอก ถ้าจะเปิดให้ตัดสินใหม่ (WASM/container)
 
-## OD-015 Remote control — DEFERRED / BOUNDARY CONFIRMED
+## OD-015 Remote control — RESOLVED (Tailscale เท่านั้น) / KNOWN GAPS
 
-D-005 ยืนยัน local UI สำหรับ MVP และเตรียม authentication boundary สำหรับ remote ในอนาคต ยังไม่เปิด remote listener
+D-005 ยืนยัน local UI สำหรับ MVP และเตรียม authentication boundary สำหรับ remote; Axon ยัง bind แค่ `127.0.0.1` และไม่มี remote listener ของตัวเอง
 
-Remote implementation, transport/auth mechanism และการควบคุมจากโทรศัพท์ยังไม่ได้ตัดสิน
+D-030: เข้าจากเครื่องอื่นผ่าน Tailscale เท่านั้น ตามที่ implement:
+- `axon passwd` ตั้งรหัสผ่าน (เก็บแบบ PBKDF2-SHA256 600k รอบ ที่ `~/.config/axon/password`, ล็อกอินทีละครั้ง ผิดแล้วหน่วง 1 วินาที); ลบรหัสผ่าน = ปิด remote ทันที
+- `axon remote` เรียก `tailscale serve` ให้เปิดเป็น HTTPS ภายใน tailnet และเพิ่มชื่อเครื่องใน `[server] hosts`; `axon remote --off` ปิด
+- server ปฏิเสธ Host ที่ไม่อยู่ใน allowlist และปฏิเสธชื่อ remote ถ้ายังไม่มีรหัสผ่าน (`axon/server.py`)
+- ห้ามเปิดออก internet สาธารณะ (เช่น Tailscale Funnel หรือ bind address อื่น)
 
-## OD-016 Persistent agent relationships
+ช่องว่างที่รู้แล้ว (ต้องทำก่อนใช้จากมือถือเป็นประจำ):
+1. ทุกเครื่องที่ล็อกอินได้ session token เดียวกันต่อการรัน server ตัดสิทธิ์ทีละเครื่องไม่ได้ ต้องรีสตาร์ท Axon ซึ่งตัดทุกเครื่องพร้อมกัน และการเปลี่ยนรหัสผ่านไม่ทำให้ session เดิมหลุด → เพิ่ม token แยกต่อเครื่องที่เพิกถอนได้
+2. ไม่มีระดับสิทธิ์: ล็อกอินแล้วทำได้ทุกอย่างรวมถึง Chat ที่มีเน็ต
+3. หน้าจอยังไม่ได้ออกแบบสำหรับมือถือ
 
-ควรให้ agent มี long-lived session ข้าม task หรือสร้าง session ต่อ task?
+## OD-016 Persistent agent relationships — RESOLVED
 
-ต้องเทียบ:
-- context continuity
-- token/context bloat
-- contamination ระหว่างงาน
-- crash recovery
+D-031: session ต่อ attempt สำหรับงาน (task) ตามที่ implement; ความต่อเนื่องมาจาก git snapshot, รายการงานที่เสร็จแล้วใน scope เดียวกัน และโน้ตจากรอบก่อนใน prompt ไม่ใช่จาก session ของ provider
+- contamination: งานหนึ่งไม่เห็นบทสนทนาของอีกงาน
+- crash recovery: ไม่ต้องพึ่ง resume ของ provider (Claude session หายถ้าถูก kill ก่อนบันทึก — Phase 1b)
+- context bloat: ทุก attempt เริ่มจาก context ว่าง
+- งานที่ต้องคุยต่อเนื่องใช้ Chat (session ยาวใน tmux ที่ผู้ใช้คุมเอง)
 
-## OD-017 Consensus mechanism
+กลับมาดูเมื่อ: วัดได้ว่าแต่ละงานเสีย token ไปกับการอ่าน repo ซ้ำจนเป็นต้นทุนหลัก
 
-Debate mode จบอย่างไร:
-- designated lead
-- verifier-based
-- score/vote
-- human escalation
-- hybrid
+## OD-017 Consensus mechanism — RESOLVED (ไม่สร้าง Debate)
 
-ไม่ควรใช้ majority vote อย่างเดียว
+D-032: ไม่สร้างระบบ Team/Debate; ใช้วงจร implement → review → revise ที่มีอยู่ (จำกัดรอบด้วย `limits.review_rounds`, ค่าเริ่มต้น 2) และผู้ใช้เป็นคนตัดสิน approve/reject
+**หลักฐานจาก Phase 5 ([PHASE5.md](PHASE5.md)):** ลองวัด proposal → critique → implement กับ direct บนงานที่ spec มีกฎละเอียด: ผลต่างเห็นเฉพาะ semver (direct ล้ม 2/2, debate ผ่าน 1 และอีกรอบค้าง) ในราคา ~3× เวลา/token และ 2 จาก 6 รอบค้างรออนุมัติ
 
-**หลักฐานจาก Phase 5 ([PHASE5.md](PHASE5.md)):** ลองวัด proposal → critique → implement กับ direct บนงานที่ spec มีกฎละเอียด: ผลต่างเห็นเฉพาะ semver (direct ล้ม 2/2, debate ผ่าน 1 และอีกรอบค้าง) ในราคา ~3× เวลา/token และ 2 จาก 6 รอบค้างรออนุมัติ ข้อเสนอ: ยังไม่ต้องเลือกกลไก consensus เพราะยังไม่สร้าง Debate — ยังไม่ใช่คำตัดสินของผู้ใช้
+ถ้าจะสร้างในอนาคต: ใช้ verifier (checks ของ project) เป็นตัวตัดสินหลัก และส่งให้ผู้ใช้ตัดสินเมื่อไม่ลงตัว ห้ามใช้ majority vote อย่างเดียว
+กลับมาดูเมื่อ: งาน VELA จริงล้มเป็นประจำในแบบที่ review → revise แก้ไม่ได้
 
 ## OD-018 First supported platforms — RESOLVED
 
