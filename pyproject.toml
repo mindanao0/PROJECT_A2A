@@ -3,18 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "navis-control"
+name = "axon-control"
 version = "0.2.0"
-description = "Navis: run several coding agents on separate, sandboxed tasks, with a local control GUI"
+description = "Axon: run several coding agents on separate, sandboxed tasks, with a local control GUI"
 requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-navis = "navis.__main__:main"      # GUI (simulation by default, --real for the runtime)
-navis-cli = "navis.cli:main"       # queue and inspect tasks from a terminal
+axon = "axon.__main__:main"      # GUI (simulation by default, --real for the runtime)
+axon-cli = "axon.cli:main"       # queue and inspect tasks from a terminal
 
 [tool.setuptools.package-data]
-navis = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.svg"]
+axon = ["web/*.html", "web/*.css", "web/*.js", "web/*.png", "web/*.svg"]
 
 [tool.setuptools.packages.find]
-include = ["navis*"]
+include = ["axon*"]

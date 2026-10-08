@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1940 308" width="1940" height="308">
+  <defs>
+    <g id="w" fill="#f4f2ee" fill-rule="evenodd">
+      <path d="M60 292L255 16H385L580 292H450L320 110L190 292ZM320 175L404 292H236Z"/>
+      <path d="M610 16H740L830 96L920 16H1050L895 154L1050 292H920L830 212L740 292H610L765 154Z"/>
+      <path d="M1200 16H1370A120 120 0 0 1 1490 136V172A120 120 0 0 1 1370 292H1200A120 120 0 0 1 1080 172V136A120 120 0 0 1 1200 16ZM1222 112A42 42 0 0 0 1222 196H1348A42 42 0 0 0 1348 112Z"/>
+      <path d="M1520 16H1695L1790 168V16H1880V292H1705L1610 140V292H1520Z"/>
+    </g>
+    <mask id="holes">
+      <rect width="1940" height="308" fill="#fff"/>
+      <g fill="#000">
+        <rect x="660" y="122" width="14" height="12"/><rect x="1118" y="86" width="12" height="12"/>
+        <rect x="1556" y="176" width="16" height="14"/><rect x="300" y="228" width="12" height="12"/>
+        <rect x="960" y="250" width="10" height="10"/><rect x="120" y="127" width="60" height="3"/><rect x="880" y="146" width="70" height="3"/><rect x="1600" y="129" width="50" height="3"/><rect x="1300" y="147" width="90" height="2"/><rect x="1820" y="60" width="12" height="10"/>
+      </g>
+    </mask>
+    <clipPath id="top"><rect width="1940" height="135"/></clipPath>
+    <clipPath id="sliver"><rect y="58" width="1940" height="7"/><rect y="224" width="1940" height="5"/></clipPath>
+    <clipPath id="bottom"><rect y="138" width="1940" height="170"/></clipPath>
+  </defs>
+  <g mask="url(#holes)">
+    <use href="#w" clip-path="url(#top)" transform="translate(-5 0)"/>
+    <use href="#w" clip-path="url(#bottom)" transform="translate(5 0)"/>
+  </g>
+  <use href="#w" clip-path="url(#sliver)" transform="translate(14 0)"/>
+  <g fill="#ff1717">
+    <rect x="18" y="140" width="96" height="3"/><rect x="40" y="146" width="50" height="10"/><rect x="70" y="128" width="30" height="6"/>
+    <rect x="130" y="228" width="34" height="18"/><rect x="176" y="238" width="12" height="7"/>
+    <rect x="286" y="118" width="44" height="13"/><rect x="340" y="104" width="10" height="8"/>
+    <rect x="444" y="200" width="22" height="12"/><rect x="478" y="216" width="40" height="9"/>
+    <rect x="598" y="132" width="70" height="6"/><rect x="700" y="146" width="18" height="16"/>
+    <rect x="770" y="118" width="52" height="10"/><rect x="836" y="146" width="14" height="7"/>
+    <rect x="904" y="252" width="26" height="14"/><rect x="990" y="270" width="56" height="5"/>
+    <rect x="1040" y="138" width="130" height="3"/><rect x="1120" y="144" width="44" height="12"/>
+    <rect x="1250" y="124" width="48" height="8"/><rect x="1336" y="12" width="18" height="6"/>
+    <rect x="1390" y="252" width="62" height="12"/><rect x="1460" y="246" width="20" height="6"/>
+    <rect x="1500" y="76" width="80" height="4"/><rect x="1560" y="84" width="26" height="12"/>
+    <rect x="1700" y="132" width="36" height="14"/><rect x="1748" y="150" width="14" height="8"/>
+    <rect x="1846" y="140" width="90" height="3"/><rect x="1470" y="150" width="110" height="3"/><rect x="1858" y="128" width="30" height="12"/>
+  </g>
+</svg>

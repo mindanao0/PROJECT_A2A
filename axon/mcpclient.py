@@ -1,4 +1,4 @@
-"""Minimal MCP client over stdio, the way an agent CLI talks to Navis' MCP server."""
+"""Minimal MCP client over stdio, the way an agent CLI talks to Axon's MCP server."""
 
 import json
 import subprocess
@@ -11,7 +11,7 @@ class Mcp:
         self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.id = 0
         self.req("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                "clientInfo": {"name": "navis-agent", "version": "0"}})
+                                "clientInfo": {"name": "axon-agent", "version": "0"}})
         self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def send(self, msg):

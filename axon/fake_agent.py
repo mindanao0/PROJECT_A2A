@@ -25,7 +25,7 @@ def emit(**event):
 
 def main(prompt):
     scenario = tomllib.loads(prompt.split("--- task ---\n", 1)[1])
-    n = int(os.environ.get("NAVIS_ATTEMPT", "1"))
+    n = int(os.environ.get("AXON_ATTEMPT", "1"))
     mcp = None
     emit(type="start", attempt=n)
     for step in scenario.get("step", []):
@@ -38,7 +38,7 @@ def main(prompt):
             with p.open("a") as f:
                 f.write(prompt if do == "prompt" else step.get("text", "x\n"))
         elif do == "mcp":
-            mcp = mcp or Mcp(json.loads(os.environ["NAVIS_MCP"]))
+            mcp = mcp or Mcp(json.loads(os.environ["AXON_MCP"]))
             emit(type="tool", tool=step["tool"], result=mcp.call(step["tool"], step.get("args", {})))
         elif do == "shell":
             r = subprocess.run(step["cmd"], shell=True, capture_output=True, text=True)

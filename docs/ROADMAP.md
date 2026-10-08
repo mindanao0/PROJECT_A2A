@@ -11,7 +11,7 @@ Exit: sandbox, cgroup และ git isolation ใช้งานได้บน�
 
 ## GUI foundation ที่มีแล้ว (ยังไม่ปิด Phase 1)
 
-`python3 -m navis` เปิด local control GUI พร้อม in-process simulated agent, SQLite snapshot/events, task board, user requests และ lifecycle controls ดู [GUI Guide](GUI.md) สำหรับผลทดสอบและข้อจำกัด
+`python3 -m axon` เปิด local control GUI พร้อม in-process simulated agent, SQLite snapshot/events, task board, user requests และ lifecycle controls ดู [GUI Guide](GUI.md) สำหรับผลทดสอบและข้อจำกัด
 
 ยังไม่มี sandboxed fake-agent CLI, production Runner, MCP หรือ provider adapter; ไม่ถือว่า execution/boundary/process-tree acceptance scenarios ผ่านจากผลทดสอบ UI simulation
 
@@ -52,7 +52,7 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 | UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
 | Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry), `test_task_stays_pinned_to_its_base_when_the_project_moves` (task ผูก base commit); stale integration commit เป็นงาน Phase 2 เพราะ Phase 1 ไม่ merge | ผ่าน (ขอบเขต Phase 1) |
 | Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
-| Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `navis-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
+| Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `axon-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
 | Two-agent collaboration | — | Phase 2 |
 | cgroup MemoryMax | `test_process_over_the_memory_limit_is_killed_even_with_swap_available`; test นี้เจอว่า MemoryMax อย่างเดียวไม่เป็นเพดานจริงเมื่อมี swap (allocate 1.5 GB ใน limit 100M ยังรอด) จึงเพิ่ม `MemorySwapMax=0` | ผ่าน |
 
@@ -77,20 +77,20 @@ Codex implements -> Claude independently reviews -> verifier checks integration 
 
 เพิ่ม merge/integration queue, conflict handling และ rollback ของ managed workspace
 Review/test ต้องผูก exact commit; rebase/merge แล้วต้องตรวจ final integration commit ใหม่
-Merge authority ตาม D-014: Runtime รวมงานบน `refs/navis/integration/<project>` ผู้ใช้ fast-forward เอง; MVP ไม่ auto push/merge/deploy
+Merge authority ตาม D-014: Runtime รวมงานบน `refs/axon/integration/<project>` ผู้ใช้ fast-forward เอง; MVP ไม่ auto push/merge/deploy
 
 Exit: สอง agent ไม่เขียน workspace/resource ชนกัน; late result และ stale evidence ไม่ถูกยอมรับ
 
 ### Phase 2 status
 
-มีแล้ว: integration branch ตาม D-014 (`navis/integrate.py`): `navis-cli integrate <task>` รวมผล task ที่ COMPLETED บน `refs/navis/integration/<project>` ด้วย `git merge-tree` (ไม่แตะ working tree), รัน check ใน clone ของ commit ที่รวมแล้ว และเลื่อน ref ก็ต่อเมื่อผ่าน; `navis-cli integration <project>` ดูสถานะ; `navis-cli promote <project>` (หรือปุ่ม **Fast-forward** ใน GUI โหมด real และปุ่ม **Add to integration branch** ในรายละเอียดงาน) fast-forward branch ของผู้ใช้ โดยปฏิเสธเมื่อ working tree สกปรก, HEAD ไม่ใช่ branch, branch ขยับไปจาก integration, หรือไม่มี check ที่ผ่านบน commit นั้นพอดี และไม่รัน hooks
-Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review with Claude**): review task แบบอ่านอย่างเดียวบน commit ผลพอดี reviewer เห็น requirement + diff + ผล check ของ Runtime ไม่เห็นบันทึกของ implementer, verdict ผูก commit, ถ้า reviewer แก้ไฟล์ verdict เป็นโมฆะ; config `require_review = true` ใน project toml ทำให้ integrate ต้องมี review ที่ approve commit นั้น ลองกับของจริงทั้งสองทิศ (`python3 probes/adapter.py codex|claude review`: Codex เขียน → Claude รีวิว 8 s; Claude เขียน → Codex รีวิว 23 s; reviewer ของ Claude มี tool เพียง Glob/Grep/Read + navis)
+มีแล้ว: integration branch ตาม D-014 (`axon/integrate.py`): `axon-cli integrate <task>` รวมผล task ที่ COMPLETED บน `refs/axon/integration/<project>` ด้วย `git merge-tree` (ไม่แตะ working tree), รัน check ใน clone ของ commit ที่รวมแล้ว และเลื่อน ref ก็ต่อเมื่อผ่าน; `axon-cli integration <project>` ดูสถานะ; `axon-cli promote <project>` (หรือปุ่ม **Fast-forward** ใน GUI โหมด real และปุ่ม **Add to integration branch** ในรายละเอียดงาน) fast-forward branch ของผู้ใช้ โดยปฏิเสธเมื่อ working tree สกปรก, HEAD ไม่ใช่ branch, branch ขยับไปจาก integration, หรือไม่มี check ที่ผ่านบน commit นั้นพอดี และไม่รัน hooks
+Review (`axon-cli review <task> -a codex|claude|fake`, ปุ่ม **Review with Claude**): review task แบบอ่านอย่างเดียวบน commit ผลพอดี reviewer เห็น requirement + diff + ผล check ของ Runtime ไม่เห็นบันทึกของ implementer, verdict ผูก commit, ถ้า reviewer แก้ไฟล์ verdict เป็นโมฆะ; config `require_review = true` ใน project toml ทำให้ integrate ต้องมี review ที่ approve commit นั้น ลองกับของจริงทั้งสองทิศ (`python3 probes/adapter.py codex|claude review`: Codex เขียน → Claude รีวิว 8 s; Claude เขียน → Codex รีวิว 23 s; reviewer ของ Claude มี tool เพียง Glob/Grep/Read + axon)
 เพิ่มแล้ว (รอบสุดท้ายของ Phase 2):
-- **Task dependency:** `navis-cli add --after <task>` (หรือ `after_task_id` ใน bridge) งานรอจน task นั้น COMPLETED แล้วเริ่มจากผลของมัน; ถ้า dependency ล้ม งานค้าง QUEUED พร้อมเหตุผลใน GUI; integrate งานที่ต่อยอดต้อง integrate ต้นทางก่อน
-- **Revision แบบจำกัดรอบ:** `navis-cli revise <task>` / ปุ่ม **Revise from review**: เริ่มจาก commit ที่ถูกรีวิว พก findings เป็น context; จำกัดด้วย `[limits] review_rounds` (ค่าเริ่มต้น 2) เกินแล้วต้องตัดสินใจเอง
+- **Task dependency:** `axon-cli add --after <task>` (หรือ `after_task_id` ใน bridge) งานรอจน task นั้น COMPLETED แล้วเริ่มจากผลของมัน; ถ้า dependency ล้ม งานค้าง QUEUED พร้อมเหตุผลใน GUI; integrate งานที่ต่อยอดต้อง integrate ต้นทางก่อน
+- **Revision แบบจำกัดรอบ:** `axon-cli revise <task>` / ปุ่ม **Revise from review**: เริ่มจาก commit ที่ถูกรีวิว พก findings เป็น context; จำกัดด้วย `[limits] review_rounds` (ค่าเริ่มต้น 2) เกินแล้วต้องตัดสินใจเอง
 - **Delegate:** MCP tool `delegate(title, spec, scope)` ให้ agent แตกงานต่อ: scope ต้องอยู่ใน scope ของตัวเอง, ลึก 1 ชั้น (task ที่ถูก delegate ไม่ delegate ต่อ), ไม่เกิน `[limits] max_delegations` (ค่าเริ่มต้น 3), เริ่มหลัง parent จบจากผลของ parent; review task ไม่ delegate; `request_review` ไม่ใช่ tool ของ agent (ผู้ใช้หรือ policy เป็นคนสั่ง เพื่อไม่ให้ implementer เลือก reviewer ของตัวเอง)
-- **Review ของ integration commit สุดท้าย:** `navis-cli review-integration <project> -a ...` / ปุ่มในแถบ integration; เมื่อ `require_review = true` promote ต้องมี review ที่ approve commit รวมนั้นพอดี (fast-forward ของ commit ที่ approve แล้วไม่ต้องรีวิวซ้ำ; รวมงานเพิ่มแล้ว commit เปลี่ยน approval เดิมใช้ไม่ได้)
-- **Rollback:** `navis-cli discard <project>` / ปุ่ม **Discard** ลบ integration branch (task ยัง COMPLETED และ integrate ใหม่ได้; branch ของผู้ใช้ไม่ถูกแตะ)
+- **Review ของ integration commit สุดท้าย:** `axon-cli review-integration <project> -a ...` / ปุ่มในแถบ integration; เมื่อ `require_review = true` promote ต้องมี review ที่ approve commit รวมนั้นพอดี (fast-forward ของ commit ที่ approve แล้วไม่ต้องรีวิวซ้ำ; รวมงานเพิ่มแล้ว commit เปลี่ยน approval เดิมใช้ไม่ได้)
+- **Rollback:** `axon-cli discard <project>` / ปุ่ม **Discard** ลบ integration branch (task ยัง COMPLETED และ integrate ใหม่ได้; branch ของผู้ใช้ไม่ถูกแตะ)
 - review task ไม่จอง scope และไม่ถูกนับเป็น "งานที่ทำแล้ว ห้ามทำซ้ำ" ของ agent อื่น
 
 ### Phase 2 evidence (2026-10-06; pytest 97 เคสผ่าน; agent จริง: codex-cli 0.160.1, claude 2.1.291)
@@ -104,7 +104,7 @@ Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wi
 | Review/test ผูก exact commit และ stale เมื่อ commit เปลี่ยน | `test_review_gate_blocks_integration_until_the_exact_commit_is_approved`, `test_a_change_request_blocks_and_new_integration_makes_the_approval_stale`, `test_promote_is_bound_to_the_commit_the_user_saw_and_runs_no_hooks` | ผ่าน |
 | Late result / stale evidence ไม่ถูกยอมรับ | Phase 1: `test_runner_restart_requeues_and_rejects_stale_result`, `test_instruction_during_an_attempt_discards_its_result`; Phase 2: revision ไม่ได้รับ approval ของ commit เดิม (`test_rounds_are_bounded_and_an_old_approval_does_not_cover_the_revision`) | ผ่าน |
 | Conflict handling | `test_conflicting_result_is_rejected_and_the_ref_stays`, `test_checks_run_on_the_merged_commit_and_a_failure_does_not_advance_the_ref` | ผ่าน |
-| Rollback ของ workspace ที่ Navis จัดการ | `test_discard_drops_the_integration_branch_and_tasks_can_be_integrated_again`; GUI: `tests/gui-real-smoke.cjs` | ผ่าน |
+| Rollback ของ workspace ที่ Axon จัดการ | `test_discard_drops_the_integration_branch_and_tasks_can_be_integrated_again`; GUI: `tests/gui-real-smoke.cjs` | ผ่าน |
 
 ข้อจำกัดที่ยังเหลือ: คุณภาพของ review วัดจากบั๊กที่ฝังเองกรณีเดียว (ไม่ใช่ชุดเปรียบเทียบ); Debate/consensus หลายรอบแบบ proposal/critique ระหว่าง agent โดยไม่ผ่านผู้ใช้เป็นงาน Phase 5 (OD-017); dependency มีต้นทางเดียว (ไม่มี fan-in หลาย dependency); GUI ยังไม่มีช่องเลือก dependency ตอนสร้างงาน (ใช้ CLI หรือ bridge); การประเมิน quota รวมของวงจร implement→review→revise ยังไม่ได้วัด (ใช้ token จริงทุกรอบ)
 
@@ -117,12 +117,12 @@ Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wi
 
 ### Phase 3 status (2026-10-06)
 
-มีแล้ว: usage accounting ต่อ attempt (`navis-cli usage`), fair scheduling ระหว่าง project ตาม usage จริง, retention (`navis-cli gc`), bounded cache และ benchmark เทียบ agent เดี่ยวกับ implement → review (`probes/bench.py`) — ผลและข้อจำกัดอยู่ใน [Phase 3 measurements](PHASE3.md)
-ผลหลัก: ในงานเล็ก 3 งานทุก config ได้คะแนนเต็ม (วัดคุณภาพไม่แยก), pipeline ใช้เวลา ~4× และ input tokens ~2.8× ของ Claude เดี่ยว, และ context ที่ Navis ส่งเป็นเพียง ~1–4% ของ input tokens (overhead ของ CLI ครองส่วนใหญ่) จึงเลื่อน Context Broker ออกไปจนกว่าจะวัดงานจริงที่ prompt ใหญ่
+มีแล้ว: usage accounting ต่อ attempt (`axon-cli usage`), fair scheduling ระหว่าง project ตาม usage จริง, retention (`axon-cli gc`), bounded cache และ benchmark เทียบ agent เดี่ยวกับ implement → review (`probes/bench.py`) — ผลและข้อจำกัดอยู่ใน [Phase 3 measurements](PHASE3.md)
+ผลหลัก: ในงานเล็ก 3 งานทุก config ได้คะแนนเต็ม (วัดคุณภาพไม่แยก), pipeline ใช้เวลา ~4× และ input tokens ~2.8× ของ Claude เดี่ยว, และ context ที่ Axon ส่งเป็นเพียง ~1–4% ของ input tokens (overhead ของ CLI ครองส่วนใหญ่) จึงเลื่อน Context Broker ออกไปจนกว่าจะวัดงานจริงที่ prompt ใหญ่
 
 ### Model และ effort ต่อ agent
 
-ตั้งได้ที่ `[agents] claude_model / claude_effort / codex_model / codex_effort` ใน `config.toml` (ว่าง = ค่าเริ่มต้นของ CLI), หน้า Settings, `navis-cli agent-options`, และ override ต่องานด้วย `add --model --effort` หรือช่องในฟอร์มสร้างงาน ส่งเป็น `--model/--effort` (Claude) และ `-m` กับ `-c model_reasoning_effort=...` (Codex); ค่าที่ใช้จริงบันทึกต่อ attempt (`navis-cli usage` แสดงคอลัมน์ SETTINGS)
+ตั้งได้ที่ `[agents] claude_model / claude_effort / codex_model / codex_effort` ใน `config.toml` (ว่าง = ค่าเริ่มต้นของ CLI), หน้า Settings, `axon-cli agent-options`, และ override ต่องานด้วย `add --model --effort` หรือช่องในฟอร์มสร้างงาน ส่งเป็น `--model/--effort` (Claude) และ `-m` กับ `-c model_reasoning_effort=...` (Codex); ค่าที่ใช้จริงบันทึกต่อ attempt (`axon-cli usage` แสดงคอลัมน์ SETTINGS)
 ยืนยันกับ CLI จริงที่ค่าต่ำสุด: Claude ใช้ Haiku (`claude-haiku-4-5-20251001`) ตามที่ตั้งจริง (ดูจาก `modelUsage` ใน log) เทียบกับค่าเริ่มต้น `claude-sonnet-5-5`; Codex ยอมรับ `model_reasoning_effort="low"` และงานผ่าน แต่ **ยืนยันไม่ได้ว่า effort เปลี่ยนพฤติกรรม** (ค่าปลอมไม่ทำให้ Codex ฟ้อง ใช้พิสูจน์ไม่ได้ และ log ไม่แสดง effort) ตามคำสั่งให้ทดสอบที่ค่าต่ำสุดจึงไม่ได้ลองระดับสูง
 
 ## Phase 4 — Optional local coding
@@ -133,7 +133,7 @@ Review (`navis-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wi
 
 ### Phase 4 status (2026-10-06)
 
-Agent Runner ของ local model สร้างและทดสอบแล้ว (`navis/local_agent.py`, adapter `local`): tool loop ที่จำกัดรอบ/คำสั่งผิด/คำสั่งซ้ำ/ความยาวต่อรอบ, permission enforcement (ไม่มี shell, path ถูกตรวจกับ workspace, ห้าม `.git`, symlink ออกนอกไม่ได้), cancellation และ recovery ผ่าน cgroup/Runner เดิม — ทุกเกณฑ์ของ MVP Contract มี test
+Agent Runner ของ local model สร้างและทดสอบแล้ว (`axon/local_agent.py`, adapter `local`): tool loop ที่จำกัดรอบ/คำสั่งผิด/คำสั่งซ้ำ/ความยาวต่อรอบ, permission enforcement (ไม่มี shell, path ถูกตรวจกับ workspace, ห้าม `.git`, symlink ออกนอกไม่ได้), cancellation และ recovery ผ่าน cgroup/Runner เดิม — ทุกเกณฑ์ของ MVP Contract มี test
 **บทบาทปิดเป็นค่าเริ่มต้น และแนะนำให้คงปิด:** ผลวัดกับโมเดล 7B ไม่มีงานใดจาก 3 งานผ่านครบ (cloud ผ่านครบ) และรอบ revision ที่ Claude รีวิวก็ไม่ช่วย รายละเอียดและวิธีเปิดอยู่ใน [Phase 4](PHASE4.md)
 
 ## Phase 5 — Advanced orchestration and UI

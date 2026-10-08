@@ -58,14 +58,14 @@ def main(sock_path):
         if method == "initialize":
             reply(mid, {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                         "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "navis", "version": "0.1.0"}})
+                        "serverInfo": {"name": "axon", "version": "0.1.0"}})
         elif method == "tools/list":
             reply(mid, {"tools": TOOLS})
         elif method == "tools/call":
             try:
                 r = call(sock_path, params.get("name"), params.get("arguments") or {})
             except OSError as e:
-                r = {"ok": False, "text": f"navis runtime unreachable: {e}"}
+                r = {"ok": False, "text": f"axon runtime unreachable: {e}"}
             reply(mid, {"content": [{"type": "text", "text": r["text"]}], "isError": not r["ok"]})
         elif method == "ping":
             reply(mid, {})

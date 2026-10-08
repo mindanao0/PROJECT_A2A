@@ -5,14 +5,14 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from navis import integrate, runtime
-from test_navis import DONE, NavisTest, edit, step
+from axon import integrate, runtime
+from test_axon import DONE, AxonTest, edit, step
 
 def verdict(status, summary):
     return step("mcp", tool="report_result", args={"status": status, "summary": summary})
 
 
-class Review(NavisTest):
+class Review(AxonTest):
     def implemented(self):
         tid = self.add(edit("src/x.py", "x = 1\n") + DONE)
         self.run_all()

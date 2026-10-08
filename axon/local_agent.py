@@ -280,19 +280,19 @@ def loop(prompt, agent, url, model, max_turns, readonly, ask=chat, options=None)
 
 
 def main(prompt):
-    url = os.environ.get("NAVIS_LOCAL_URL", "http://127.0.0.1:11434")
+    url = os.environ.get("AXON_LOCAL_URL", "http://127.0.0.1:11434")
     host = urllib.parse.urlparse(url).hostname
-    mcp = Mcp(json.loads(os.environ["NAVIS_MCP"]))
-    agent = Agent(os.path.realpath(os.getcwd()), mcp, os.environ.get("NAVIS_LOCAL_READONLY") == "1")
-    emit(type="start", model=os.environ.get("NAVIS_LOCAL_MODEL"))
+    mcp = Mcp(json.loads(os.environ["AXON_MCP"]))
+    agent = Agent(os.path.realpath(os.getcwd()), mcp, os.environ.get("AXON_LOCAL_READONLY") == "1")
+    emit(type="start", model=os.environ.get("AXON_LOCAL_MODEL"))
     if host not in ("127.0.0.1", "localhost", "::1"):  # local-only: never fail over to a remote endpoint
         agent.run("report_result", {"status": "failed", "summary": f"local model url must be loopback, got {url}"})
         return
     try:
-        options = {"num_predict": int(os.environ.get("NAVIS_LOCAL_MAX_TOKENS", "1024"))}
-        if int(os.environ.get("NAVIS_LOCAL_NUM_GPU", "0")):
-            options["num_gpu"] = int(os.environ["NAVIS_LOCAL_NUM_GPU"])
-        loop(prompt, agent, url, os.environ["NAVIS_LOCAL_MODEL"], int(os.environ.get("NAVIS_LOCAL_MAX_TURNS", "20")),
+        options = {"num_predict": int(os.environ.get("AXON_LOCAL_MAX_TOKENS", "1024"))}
+        if int(os.environ.get("AXON_LOCAL_NUM_GPU", "0")):
+            options["num_gpu"] = int(os.environ["AXON_LOCAL_NUM_GPU"])
+        loop(prompt, agent, url, os.environ["AXON_LOCAL_MODEL"], int(os.environ.get("AXON_LOCAL_MAX_TURNS", "20")),
              agent.readonly, options=options)
     except OSError as e:  # the model server is down or too slow: a clean failure, not a crash that gets retried
         agent.run("report_result", {"status": "failed", "summary": f"local model unreachable: {e}"})

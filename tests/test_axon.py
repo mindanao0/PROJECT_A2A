@@ -13,7 +13,7 @@ import time
 import unittest
 from pathlib import Path
 
-from navis import runtime, sandbox
+from axon import runtime, sandbox
 
 DONE = '[[step]]\ndo = "mcp"\ntool = "report_result"\nargs = {status = "done", summary = "ok"}\n'
 TOKEN = "FAKE-SECRET-0123456789abcdefghij"
@@ -46,11 +46,11 @@ def sandbox_works():
 
 
 @unittest.skipUnless(sandbox_works(), "needs bubblewrap and a systemd user session")
-class NavisTest(unittest.TestCase):
+class AxonTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="navis-test-"))
-        os.environ["NAVIS_HOME"] = str(self.tmp / "home")
-        os.environ["NAVIS_CONFIG"] = str(self.tmp / "cfg")
+        self.tmp = Path(tempfile.mkdtemp(prefix="axon-test-"))
+        os.environ["AXON_HOME"] = str(self.tmp / "home")
+        os.environ["AXON_CONFIG"] = str(self.tmp / "cfg")
         self.proj = self.tmp / "proj"
         for f, text in {"src/a.py": "a = 1\n", "docs/b.md": "doc\n", "tests/t.sh": "true\n"}.items():
             (self.proj / f).parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +94,7 @@ class NavisTest(unittest.TestCase):
         self.assertTrue(self.rt.run_until_idle(timeout), "runtime did not become idle")
 
     def shown(self, aid, path):
-        return self.git("show", f"refs/navis/attempts/{aid}:{path}")
+        return self.git("show", f"refs/axon/attempts/{aid}:{path}")
 
     def outcomes(self, tid):
         return [r["outcome"] for r in self.store.q("select outcome from attempts where task = ? order by n", tid)]
@@ -108,7 +108,7 @@ class NavisTest(unittest.TestCase):
         self.fail("condition not reached")
 
 
-class Completion(NavisTest):
+class Completion(AxonTest):
     def test_done_task_is_verified_and_fetched(self):
         tid = self.add(edit("src/new.py", "print(1)") + DONE)
         self.run_all()
@@ -174,7 +174,7 @@ class Completion(NavisTest):
         self.assertEqual(self.shown(f"{tid}-2", "src/one.py"), "x\n")
 
 
-class Scheduling(NavisTest):
+class Scheduling(AxonTest):
     def test_duplicate_task_is_not_queued(self):
         tid = self.add(DONE)
         self.assertEqual(runtime.add_task(self.store, "p", "fake", DONE, ["src"]), (None, tid))
@@ -207,7 +207,7 @@ class Scheduling(NavisTest):
         self.assertEqual(self.outcomes(tid), ["quota", "done"])
 
 
-class Safety(NavisTest):
+class Safety(AxonTest):
     def test_stop_kills_orphaned_processes(self):
         tid = self.add(step("orphan", path="orphan.log") + step("hang"))
         runner = threading.Thread(target=self.rt.run_until_idle, kwargs={"timeout": 60})
@@ -225,14 +225,14 @@ class Safety(NavisTest):
         self.assertEqual(subprocess.run(["pgrep", "-f", str(log)], capture_output=True).returncode, 1)
 
     def test_credential_in_diff_blocks_fetch_and_is_redacted(self):
-        spec = (step("shell", cmd='cat "$NAVIS_AGENT_HOME/.credentials.json" > src/leak.txt')
+        spec = (step("shell", cmd='cat "$AXON_AGENT_HOME/.credentials.json" > src/leak.txt')
                 + step("mcp", tool="report_result", args={"status": "done", "summary": f"token {TOKEN}"}))
         tid = self.add(spec)
         self.run_all()
         t = self.task(tid)
         self.assertEqual(t["status"], "FAILED")
         self.assertIn("credential", t["note"])
-        self.assertEqual(self.git("rev-parse", "--verify", "-q", f"refs/navis/attempts/{tid}-1"), "")
+        self.assertEqual(self.git("rev-parse", "--verify", "-q", f"refs/axon/attempts/{tid}-1"), "")
         events = " ".join(e["data"] for e in self.store.q("select data from events"))
         self.assertNotIn(TOKEN, events)
         self.assertIn("[REDACTED]", events)
@@ -241,13 +241,13 @@ class Safety(NavisTest):
         other = self.tmp / "home" / "agents" / "codex"
         other.mkdir(parents=True)
         (other / "auth.json").write_text("{}")
-        outside = Path.home() / f".navis-escape-{os.getpid()}"
+        outside = Path.home() / f".axon-escape-{os.getpid()}"
         probes = {
             "real_home": f"touch {outside}",
             "project_objects": f"touch {self.proj}/.git/objects/x",
             "project_checkout": f"cat {self.proj}/docs/b.md",
             "other_agent": f"cat {other}/auth.json",
-            "navis_db": f"cat {self.tmp}/home/navis.db",
+            "axon_db": f"cat {self.tmp}/home/axon.db",
             "docker": "test -S /var/run/docker.sock",
             "user_bus": f"test -S /run/user/{os.getuid()}/bus",
             "dns_config": "cat /etc/resolv.conf",  # agents need DNS to reach their provider
@@ -284,7 +284,7 @@ class Safety(NavisTest):
         self.rt.tick()
         for th in self.rt.threads:
             th.join(30)
-        self.assertTrue(self.git("rev-parse", "--verify", f"refs/navis/attempts/{tid}-1").strip())
+        self.assertTrue(self.git("rev-parse", "--verify", f"refs/axon/attempts/{tid}-1").strip())
         self.assertEqual(self.task(tid)["status"], "RUNNING")
         rt = runtime.Runtime(self.store)  # the next runner
         rt.recover()
@@ -329,7 +329,7 @@ class Safety(NavisTest):
         self.run_all()
         self.assertEqual(self.task(tid)["status"], "COMPLETED")
         self.assertEqual(self.task(tid)["base"], base)
-        self.assertEqual(self.git("rev-parse", f"refs/navis/attempts/{tid}-1~1").strip(), base)
+        self.assertEqual(self.git("rev-parse", f"refs/axon/attempts/{tid}-1~1").strip(), base)
 
     def test_hooks_and_config_planted_in_the_clone_never_run_on_the_host(self):
         marker = self.tmp / "ran-on-host"

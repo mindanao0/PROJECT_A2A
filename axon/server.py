@@ -22,8 +22,8 @@ from .core import ControlError
 WEB = Path(__file__).with_name("web")
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 LOGIN_LOCK = threading.Lock()  # one password guess at a time, 1 s apart after a miss
-FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/navis-wordmark.png": "navis-wordmark.png",
-         "/navis-icon.svg": "navis-icon.svg", "/xterm.js": "xterm.js", "/xterm.css": "xterm.css", "/addon-fit.js": "addon-fit.js"}
+FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css", "/axon-wordmark.svg": "axon-wordmark.svg",
+         "/axon-icon.svg": "axon-icon.svg", "/xterm.js": "xterm.js", "/xterm.css": "xterm.css", "/addon-fit.js": "addon-fit.js"}
 
 
 def hash_password(password, iterations=600_000):
@@ -76,7 +76,7 @@ class ControlServer(ThreadingHTTPServer):
         self.password_file = password_file
         super().__init__(("127.0.0.1", port), Handler)
         self.origin = f"http://127.0.0.1:{self.server_port}"
-        self.session_cookie = f"navis_session_{self.server_port}"
+        self.session_cookie = f"axon_session_{self.server_port}"
         self.local_hosts = {f"127.0.0.1:{self.server_port}", f"localhost:{self.server_port}"}
         self.remote_hosts = set(hosts)
 
@@ -127,14 +127,14 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(403, {"error": "Invalid origin"})
             return False
         if (host in remotes or origin in {f"https://{h}" for h in remotes}) and not self.server.password():
-            self.reply(403, {"error": "Remote access needs a password: run `navis passwd` on the Navis machine"})
+            self.reply(403, {"error": "Remote access needs a password: run `axon passwd` on the Axon machine"})
             return False
         if api:
             auth = self.headers.get("Authorization", "")
             ok = hmac.compare_digest(auth.encode(), ("Bearer " + self.server.token).encode()) if auth else self.session_ok()
             if not ok:
                 login = bool(self.server.password())
-                self.reply(401, {"error": "Sign in with your Navis password" if login else "Open the launch link (run `navis open`)",
+                self.reply(401, {"error": "Sign in with your Axon password" if login else "Open the launch link (run `axon`)",
                                  "login": login})
                 return False
         return True
@@ -191,6 +191,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(400, {"error": str(exc)})
             return
         key = self.headers.get("Sec-WebSocket-Key", "")
+        self.protocol_version = "HTTP/1.1"  # 101 exists only in HTTP/1.1; Firefox refuses an "HTTP/1.0 101"
         self.send_response(101)
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
@@ -320,7 +321,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         stored = self.server.password()
         if not stored:
-            self.reply(404, {"error": "No password is set; run `navis passwd` on the Navis machine"})
+            self.reply(404, {"error": "No password is set; run `axon passwd` on the Axon machine"})
             return
         ok, body = self.json_body()
         if not ok:

@@ -1,14 +1,14 @@
-"""Integration branch (D-014): merge on a Navis-owned ref, check the exact commit, user fast-forwards."""
+"""Integration branch (D-014): merge on a Axon-owned ref, check the exact commit, user fast-forwards."""
 
 import unittest
 
-from navis import integrate
-from test_navis import DONE, NavisTest, edit
+from axon import integrate
+from test_axon import DONE, AxonTest, edit
 
-REF = "refs/navis/integration/p"
+REF = "refs/axon/integration/p"
 
 
-class Integration(NavisTest):
+class Integration(AxonTest):
     def done(self, path, text="x\n"):
         tid = self.add(edit(path, text) + DONE)
         self.run_all()

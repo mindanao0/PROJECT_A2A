@@ -1,6 +1,6 @@
 /* Optional browser check of the real runtime (fake-agent, sandboxed, no quota): create a task, add it to
  * the integration branch, fast-forward the user's branch. Needs bubblewrap and a systemd user session.
- * NODE_PATH=/tmp/navis-browser-check/node_modules node tests/gui-real-smoke.cjs   (see gui-smoke.cjs) */
+ * NODE_PATH=/tmp/axon-browser-check/node_modules node tests/gui-real-smoke.cjs   (see gui-smoke.cjs) */
 const { chromium } = require('playwright');
 const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
@@ -15,8 +15,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   fs.writeFileSync(path.join(proj, 'src/a.py'), 'a = 1\n');
   git('init', '-q', '-b', 'main'); git('add', '-A'); git('commit', '-qm', 'init');
   fs.writeFileSync(path.join(root, 'cfg/projects/demo.toml'), `path = "${proj}"\nprotected = []\n[checks]\nok = "true"\n`);
-  const server = spawn(process.env.PYTHON || 'python3', ['-m', 'navis', '--port', '0', '--no-browser', '--state-dir', state],
-    {stdio: 'ignore', env: {...process.env, NAVIS_HOME: path.join(root, 'home'), NAVIS_CONFIG: path.join(root, 'cfg')}});
+  const server = spawn(process.env.PYTHON || 'python3', ['-m', 'axon', '--port', '0', '--no-browser', '--state-dir', state],
+    {stdio: 'ignore', env: {...process.env, AXON_HOME: path.join(root, 'home'), AXON_CONFIG: path.join(root, 'cfg')}});
   let browser;
   try {
     for (let i = 0; i < 100 && !fs.existsSync(path.join(state, 'launch.url')); i++) await wait(100);
@@ -42,7 +42,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await strip.getByRole('button', {name: 'Discard', exact: true}).click();
     await page.locator('#confirm-dialog').getByRole('button', {name: 'Confirm discard', exact: true}).click();
     await page.locator('.integration-strip').waitFor({state: 'detached', timeout: 15000});
-    let gone = false; try { git('rev-parse', '--verify', '-q', 'refs/navis/integration/demo'); } catch (_) { gone = true; }
+    let gone = false; try { git('rev-parse', '--verify', '-q', 'refs/axon/integration/demo'); } catch (_) { gone = true; }
     assert(gone, 'Discard must remove the integration ref');
     await page.locator('[data-task]').first().click();
     await page.getByRole('button', {name: 'Add to integration branch', exact: true}).click();

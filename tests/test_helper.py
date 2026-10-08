@@ -5,8 +5,8 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from navis import helper, runtime
-from test_navis import DONE, TOKEN, NavisTest, edit
+from axon import helper, runtime
+from test_axon import DONE, TOKEN, AxonTest, edit
 
 
 class FakeOllama(BaseHTTPRequestHandler):
@@ -24,7 +24,7 @@ class FakeOllama(BaseHTTPRequestHandler):
         pass
 
 
-class Helper(NavisTest):
+class Helper(AxonTest):
     def setUp(self):
         super().setUp()
         FakeOllama.seen, FakeOllama.reply = [], ""

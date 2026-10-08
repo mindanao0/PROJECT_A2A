@@ -1,4 +1,4 @@
-"""The GUI drives the real runtime through navis.bridge (fake-agent only; no quota)."""
+"""The GUI drives the real runtime through axon.bridge (fake-agent only; no quota)."""
 
 import http.client
 import json
@@ -11,14 +11,14 @@ import time
 import unittest
 from unittest import mock
 
-from navis import runtime
-from navis.bridge import Bridge
-from navis.core import ControlError
-from navis.server import ControlServer
-from test_navis import DONE, NavisTest, edit, step
+from axon import runtime
+from axon.bridge import Bridge
+from axon.core import ControlError
+from axon.server import ControlServer
+from test_axon import DONE, AxonTest, edit, step
 
 
-class BridgeTest(NavisTest):
+class BridgeTest(AxonTest):
     def setUp(self):
         super().setUp()
         self.b = Bridge()
@@ -55,7 +55,7 @@ class BridgeTest(NavisTest):
         return self.b.command({"action": action, "task_id": tid, "attempt_id": t["attempt_id"], **extra})
 
 
-class GuiWithoutRunner(NavisTest):
+class GuiWithoutRunner(AxonTest):
     def test_task_made_in_the_gui_runs_in_a_separate_runner(self):
         gui = Bridge(runner=False)  # takes no runner lock, so a terminal runner can own it
         rt = runtime.Runtime(gui.store)
@@ -73,9 +73,9 @@ class GuiWithoutRunner(NavisTest):
 
 
 @unittest.skipUnless(shutil.which("tmux"), "needs tmux")
-class ChatSessions(NavisTest):
-    """The GUI's chat view: only navis-chat-* tmux sessions, as a terminal over a WebSocket (a `cat` stands in for the agent)."""
-    NAME = "navis-chat-test-fake"
+class ChatSessions(AxonTest):
+    """The GUI's chat view: only axon-chat-* tmux sessions, as a terminal over a WebSocket (a `cat` stands in for the agent)."""
+    NAME = "axon-chat-test-fake"
 
     def setUp(self):
         super().setUp()
@@ -111,7 +111,7 @@ class ChatSessions(NavisTest):
         """Keys typed in the browser reach the agent at once, its output comes back, a resize reaches tmux,
         and closing the page detaches only that viewer."""
         import base64, socket, struct
-        from navis.server import ws_recv
+        from axon.server import ws_recv
         srv = ControlServer(self.b, 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.server_close)
@@ -127,15 +127,15 @@ class ChatSessions(NavisTest):
                        f"Origin: {origin}\r\nAuthorization: Bearer {srv.token}\r\nUpgrade: websocket\r\n"
                        f"Connection: Upgrade\r\nSec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\n\r\n").encode())
             f = s.makefile("rb")
-            status = f.readline().split()[1]
+            status = f.readline().split()[:2]
             while f.readline() not in (b"\r\n", b""):
                 pass
             return s, f, status
 
-        self.assertEqual(connect("other-session")[2], b"400")
-        self.assertEqual(connect(self.NAME, "https://attacker.example")[2], b"403")
+        self.assertEqual(connect("other-session")[2][1], b"400")
+        self.assertEqual(connect(self.NAME, "https://attacker.example")[2][1], b"403")
         s, f, status = connect(self.NAME)
-        self.assertEqual(status, b"101")
+        self.assertEqual(status, [b"HTTP/1.1", b"101"])  # Firefox refuses an HTTP/1.0 101
         s.sendall(frame(json.dumps({"resize": [91, 23]}).encode()))
         s.sendall(frame(json.dumps({"data": "typed-in-browser\r"}).encode()))
         seen = b""
@@ -158,13 +158,14 @@ class ChatSessions(NavisTest):
         repo = runtime.data_dir() / "chats" / "x" / "repo"
         (repo / ".git" / "info").mkdir(parents=True)
         (repo / ".git" / "info" / "exclude").write_text("# a git clone has this file\n")
-        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@navis_repo", str(repo)], check=True)
+        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@axon_repo", str(repo)], check=True)
+        subprocess.run(["tmux", "set-option", "-t", self.NAME, "@axon_cwd", "/w/proj"], check=True)
         png = b"\x89PNG\r\n\x1a\n" + b"0" * 20
         path = self.b.chat_upload(self.NAME, "image/png", png)["path"]
         self.assertEqual(open(path, "rb").read(), png)
-        self.assertIn(".navis-uploads/", (repo / ".git" / "info" / "exclude").read_text())
+        self.assertIn(".axon-uploads/", (repo / ".git" / "info" / "exclude").read_text())
         time.sleep(0.3)
-        self.assertIn(path, self.screen())
+        self.assertIn(f"/w/proj/.axon-uploads/{os.path.basename(path)}", self.screen())  # where the agent sees it
         for ctype, data in (("image/png", b"not a png"), ("text/html", b"<script>"), ("image/svg+xml", b"<svg>")):
             with self.assertRaises(ControlError):
                 self.b.chat_upload(self.NAME, ctype, data)
@@ -192,8 +193,8 @@ class Snapshot(BridgeTest):
         self.assertEqual(kinds["diff"]["files"], [{"path": "src/new.py", "out_of_scope": False, "protected": False}])
         self.assertEqual(kinds["diff"]["hash"], t["head"])
         self.assertIn("report_result", kinds["agent_log"]["content"])
-        self.assertIn(f"Navis task {tid}, attempt 1", kinds["prompt"]["content"])
-        self.assertEqual(t["result_ref"], f"refs/navis/attempts/{tid}-1")
+        self.assertIn(f"Axon task {tid}, attempt 1", kinds["prompt"]["content"])
+        self.assertEqual(t["result_ref"], f"refs/axon/attempts/{tid}-1")
         self.assertEqual(snap["resources"]["slots"][0], {"backend": "fake", "used": 0, "limit": 2})
         types = [e["type"] for e in snap["events"]]
         self.assertTrue({"STATE", "ATTEMPT", "TOOL", "CHECK", "OUTCOME"} <= set(types), types)

@@ -5,8 +5,8 @@ import subprocess
 import time
 import unittest
 
-from navis import bridge, retention, runtime, usage
-from test_navis import DONE, NavisTest, edit
+from axon import bridge, retention, runtime, usage
+from test_axon import DONE, AxonTest, edit
 
 # Shapes copied from real runs of codex-cli 0.160.1 and claude 2.1.291.
 CODEX = "\n".join([
@@ -76,7 +76,7 @@ class Limits(unittest.TestCase):
         self.assertIsNone(usage.claude_limits(home / "none", cache.with_name("none.json")))
 
 
-class Accounting(NavisTest):
+class Accounting(AxonTest):
     def test_attempts_record_context_bytes_and_the_report_sums_exposed_usage(self):
         tid = self.add(edit("src/x.py") + DONE)
         self.run_all()
@@ -101,7 +101,7 @@ class Accounting(NavisTest):
         self.assertEqual(sorted(k[1] for k in usage.report(self.store, 0)), ["implement", "review"])
 
 
-class Fairness(NavisTest):
+class Fairness(AxonTest):
     def test_a_quiet_project_goes_before_a_busy_one_even_with_a_higher_task_id(self):
         other = self.tmp / "other"
         (other / "src").mkdir(parents=True)
@@ -126,7 +126,7 @@ class Fairness(NavisTest):
         self.assertEqual([r["task"] for r in self.store.q("select task from attempts order by started")], ids)
 
 
-class Retention(NavisTest):
+class Retention(AxonTest):
     def test_gc_removes_old_attempt_dirs_of_finished_tasks_only(self):
         old, recent = self.add(edit("src/a.py") + DONE, scope=["src/a.py"]), self.add(edit("src/b.py") + DONE, scope=["src/b.py"])
         self.run_all()
@@ -144,7 +144,7 @@ class Retention(NavisTest):
         self.assertGreater(done["bytes"], 0)
         self.assertEqual([d.exists() for d in dirs.values()], [False, True, True])
         self.assertEqual(self.task(old)["status"], "COMPLETED")
-        self.assertTrue(self.git("rev-parse", f"refs/navis/attempts/{old}-1").strip())  # result commits stay reachable
+        self.assertTrue(self.git("rev-parse", f"refs/axon/attempts/{old}-1").strip())  # result commits stay reachable
         self.assertTrue(self.store.one("select 1 from events where task = ? and kind = 'check'", old))  # evidence rows stay
 
 

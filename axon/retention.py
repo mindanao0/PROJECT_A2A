@@ -1,6 +1,6 @@
 """Retention: old attempt directories (logs, prompts, bundles) of finished tasks.
 
-Never touched: attempts of tasks that are not finished, `refs/navis/attempts/*` (they keep result commits
+Never touched: attempts of tasks that are not finished, `refs/axon/attempts/*` (they keep result commits
 reachable for retry, continue and integrate; delete one with `git update-ref -d` if you really want it
 gone), and the events table (check results and verdicts stay queryable)."""
 

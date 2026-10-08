@@ -3,9 +3,9 @@
 import json
 import unittest
 
-from navis import cli, runtime
+from axon import cli, runtime
 from test_bridge import BridgeTest
-from test_navis import DONE, NavisTest, step
+from test_axon import DONE, AxonTest, step
 
 # Lines as printed by `claude -p --output-format stream-json --verbose` and `codex exec --json` (claude 2.1.292, codex 0.160.1).
 CLAUDE = [
@@ -39,9 +39,9 @@ class ReadableLog(unittest.TestCase):
             return runtime.format_log_line(json.dumps({"type": "assistant", "message": {"content": [
                 {"type": "tool_use", "name": name, "input": args}]}}))
         self.assertEqual(call("Edit", {"file_path": "a.py", "old_string": "x" * 500, "new_string": "y" * 500}), "→ Edit a.py")
-        self.assertEqual(call("mcp__navis__report_result", {"status": "done", "summary": "fixed"}), "■ report: done: fixed")
-        self.assertEqual(call("mcp__navis__ask_user", {"question": "Which?", "options": ["a", "b"]}), "? asks: Which? [a | b]")
-        self.assertEqual(call("mcp__navis__run_check", {"name": "unit"}), "→ run_check unit")
+        self.assertEqual(call("mcp__axon__report_result", {"status": "done", "summary": "fixed"}), "■ report: done: fixed")
+        self.assertEqual(call("mcp__axon__ask_user", {"question": "Which?", "options": ["a", "b"]}), "? asks: Which? [a | b]")
+        self.assertEqual(call("mcp__axon__run_check", {"name": "unit"}), "→ run_check unit")
 
     def test_codex_conversation(self):
         text = runtime.readable_log("\n".join(CODEX))
@@ -55,7 +55,7 @@ class ReadableLog(unittest.TestCase):
         self.assertLess(len(runtime.readable_log(big)), 600)
 
 
-class AskOptions(NavisTest):
+class AskOptions(AxonTest):
     def test_options_are_kept_capped_and_a_number_answers(self):
         spec = (step("mcp", tool="ask_user", args={"question": "color?", "options": ["red", "blue", " ", "x" * 300] + list("abcd")}, attempt=1)
                 + step("prompt", path="src/prompt.txt", attempt=2)

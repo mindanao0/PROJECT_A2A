@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#050505">
-  <title>Navis — Control room</title>
-  <link rel="icon" href="/navis-icon.svg" type="image/svg+xml">
+  <title>Axon — Control room</title>
+  <link rel="icon" href="/axon-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
@@ -13,8 +13,8 @@
 <a class="skip-link" href="#content">Skip to workspace</a>
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand" aria-label="Navis">
-      <img class="brand-logo" src="/navis-wordmark.png" alt="NAVIS" width="1807" height="308">
+    <div class="brand" aria-label="Axon">
+      <img class="brand-logo" src="/axon-wordmark.svg" alt="AXON" width="1940" height="308">
       <span class="brand-subtitle"><span aria-hidden="true">//</span> CYBERNETICS CONTROL</span>
     </div>
     <div class="workspace-tag"><span class="avatar" aria-hidden="true">D</span><div>Operator workspace<small>LOCAL / SINGLE USER</small></div><span class="signal" aria-hidden="true"></span></div>
@@ -39,24 +39,24 @@
   <main>
     <header class="topbar"><div><span class="muted">Workspace</span><span class="breadcrumb" aria-hidden="true">/</span><span id="view-label">Overview</span></div><div class="topbar-right"><button id="open-command" class="command-trigger" aria-label="Open command palette" aria-haspopup="dialog" aria-controls="command-dialog" aria-keyshortcuts="Control+k Meta+k"><span aria-hidden="true">⌘</span><span class="command-trigger-label">Command</span><kbd>Ctrl K</kbd></button><span class="local-chip" id="where-chip"><i class="signal" aria-hidden="true"></i> LOCAL</span><button id="notifications" class="icon-button" aria-label="Enable browser notifications" title="Enable browser notifications">◷</button><button id="refresh" class="icon-button" aria-label="Refresh">↻</button></div></header>
     <div class="page">
-      <section id="command-masthead" class="command-masthead" aria-label="Navis command center">
+      <section id="command-masthead" class="command-masthead" aria-label="Axon command center">
         <svg class="circuit-traces" viewBox="0 0 680 260" fill="none" aria-hidden="true" focusable="false"><path d="M0 45h220l50 50h150l50-50h210M0 210h170l65-65h180l55 55h210M330 0v35l60 60v75l70 70h220M500 0v55l-45 45v55l55 55v50M590 0v80l-35 35v100l45 45"/><circle cx="220" cy="45" r="4"/><circle cx="170" cy="210" r="4"/><circle cx="420" cy="95" r="4"/></svg>
         <div class="masthead-wordmark">
           <div class="masthead-kicker"><span class="signal" aria-hidden="true"></span> PERSONAL AGENT ORCHESTRATION <span class="masthead-index">N / 01</span></div>
-          <img src="/navis-wordmark.png" alt="NAVIS" width="1807" height="308" fetchpriority="high">
+          <img src="/axon-wordmark.svg" alt="AXON" width="1940" height="308" fetchpriority="high">
           <div class="masthead-tagline">ONE OPERATOR<span aria-hidden="true">/</span>FULL CONTROL</div>
         </div>
         <div class="masthead-system">
           <div class="reactor" aria-hidden="true"><svg viewBox="0 0 160 160" focusable="false"><circle class="reactor-track" cx="80" cy="80" r="66"/><circle class="reactor-orbit" cx="80" cy="80" r="66"/><circle class="reactor-inner" cx="80" cy="80" r="51"/><path class="reactor-crosshair" d="M80 3v20M80 137v20M3 80h20M137 80h20M47 47h15M47 47v15M113 47H98M113 47v15M47 113h15M47 113V98M113 113H98M113 113V98"/><path class="reactor-core" d="m65 58 30 22-30 22z"/></svg></div>
           <div class="system-readout"><span>RUNTIME LINK</span><strong id="system-state">CONNECTING</strong><span id="system-mode">AWAITING RUNTIME</span></div>
         </div>
-        <div class="masthead-foot"><span><span aria-hidden="true">⌁</span> LOCAL COMMAND CENTER</span><span id="dispatch-state">CHECKING DISPATCH</span><span class="masthead-version">NAVIS / V0.2</span></div>
+        <div class="masthead-foot"><span><span aria-hidden="true">⌁</span> LOCAL COMMAND CENTER</span><span id="dispatch-state">CHECKING DISPATCH</span><span class="masthead-version">AXON / V0.2</span></div>
       </section>
-      <div class="page-heading"><div><div class="eyebrow">NAVIS / CYBERNETICS CONTROL</div><h1 id="page-title" tabindex="-1">Control room</h1><p id="page-subtitle">Your directives. Your agents. Your control.</p></div><div class="heading-actions"><button id="pause" class="button secondary" disabled>Ⅱ Pause dispatch</button><button id="new-task" class="button primary" disabled>+ New task</button></div></div>
-      <div id="runtime-banner" class="notice" aria-live="polite"><span class="notice-icon" aria-hidden="true">◌</span><div><strong>Connecting to runtime</strong><span>Checking current mode and capabilities.</span></div><span class="notice-badge">NAVIS</span></div>
+      <div class="page-heading"><div><div class="eyebrow">AXON / CYBERNETICS CONTROL</div><h1 id="page-title" tabindex="-1">Control room</h1><p id="page-subtitle">Your directives. Your agents. Your control.</p></div><div class="heading-actions"><button id="pause" class="button secondary" disabled>Ⅱ Pause dispatch</button><button id="new-task" class="button primary" disabled>+ New task</button></div></div>
+      <div id="runtime-banner" class="notice" aria-live="polite"><span class="notice-icon" aria-hidden="true">◌</span><div><strong>Connecting to runtime</strong><span>Checking current mode and capabilities.</span></div><span class="notice-badge">AXON</span></div>
       <div id="connection-alert" class="connection-alert" hidden role="alert"></div>
       <section id="content" aria-label="Workspace content"></section>
-      <footer><span><b>NAVIS</b> / PERSONAL COMMAND SYSTEM</span><span class="live-status"><time id="local-clock">LOCAL / —</time><span id="sync-state">SYNC / WAITING</span></span><span id="where-foot"><i class="dot" aria-hidden="true"></i>This machine</span></footer>
+      <footer><span><b>AXON</b> / PERSONAL COMMAND SYSTEM</span><span class="live-status"><time id="local-clock">LOCAL / —</time><span id="sync-state">SYNC / WAITING</span></span><span id="where-foot"><i class="dot" aria-hidden="true"></i>This machine</span></footer>
     </div>
   </main>
 </div>
@@ -85,10 +85,10 @@
   </form>
 </dialog>
 <dialog id="detail-dialog" aria-labelledby="detail-title"><div id="task-detail"></div></dialog>
-<dialog id="project-dialog" aria-labelledby="project-title"><form id="project-form"><div class="dialog-heading"><h2 id="project-title">Add a project</h2><button type="button" class="icon-button" data-close="project-dialog" aria-label="Close">×</button></div><p id="project-description" class="muted">Add a project through the active runtime.</p><label>Project name<input name="name" required maxlength="80" placeholder="PROJECT_NAVIS"></label><div id="project-path-field"><label>Repository path<input name="path" maxlength="1000" placeholder="/home/user/projects/PROJECT_NAVIS"></label><p class="field-help">The runtime validates and grants repository access for this path.</p></div><p class="form-error" role="alert"></p><div class="dialog-footer"><button type="button" class="button secondary" data-close="project-dialog">Cancel</button><button type="submit" class="button primary">Add project</button></div></form></dialog>
+<dialog id="project-dialog" aria-labelledby="project-title"><form id="project-form"><div class="dialog-heading"><h2 id="project-title">Add a project</h2><button type="button" class="icon-button" data-close="project-dialog" aria-label="Close">×</button></div><p id="project-description" class="muted">Add a project through the active runtime.</p><label>Project name<input name="name" required maxlength="80" placeholder="PROJECT_AXON"></label><div id="project-path-field"><label>Repository path<input name="path" maxlength="1000" placeholder="/home/user/projects/PROJECT_AXON"></label><p class="field-help">The runtime validates and grants repository access for this path.</p></div><p class="form-error" role="alert"></p><div class="dialog-footer"><button type="button" class="button secondary" data-close="project-dialog">Cancel</button><button type="submit" class="button primary">Add project</button></div></form></dialog>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description"><form method="dialog"><div class="dialog-heading"><h2 id="confirm-title">Confirm control</h2></div><p id="confirm-description"></p><small id="confirm-attempt"></small><div class="dialog-footer"><button class="button secondary" value="cancel" autofocus>Keep task</button><button id="confirm-control" class="button danger" value="confirm">Confirm</button></div></form></dialog>
 <dialog id="copy-dialog" aria-labelledby="copy-title"><div class="dialog-heading"><h2 id="copy-title">Copy manually</h2><button class="icon-button" data-close="copy-dialog" aria-label="Close">×</button></div><label>Text to copy<textarea id="copy-text" rows="7" readonly></textarea></label></dialog>
-<dialog id="login-dialog" aria-labelledby="login-title"><form id="login-form"><div class="dialog-heading"><div><span class="eyebrow">NAVIS / SIGN IN</span><h2 id="login-title">Sign in</h2></div></div><label>Password<input type="password" name="password" id="login-password" required maxlength="200" autocomplete="current-password"></label><p class="form-error" role="alert"></p><div class="dialog-footer"><button type="submit" class="button primary">Sign in →</button></div></form></dialog>
+<dialog id="login-dialog" aria-labelledby="login-title"><form id="login-form"><div class="dialog-heading"><div><span class="eyebrow">AXON / SIGN IN</span><h2 id="login-title">Sign in</h2></div></div><label>Password<input type="password" name="password" id="login-password" required maxlength="200" autocomplete="current-password"></label><p class="form-error" role="alert"></p><div class="dialog-footer"><button type="submit" class="button primary">Sign in →</button></div></form></dialog>
 <div id="toast" role="status" hidden></div>
 <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 </body>

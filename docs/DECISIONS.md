@@ -15,11 +15,11 @@
 | D-007 | Project แรกคือ PROJECT_VELA | Python 3.11 + uv + pytest/ruff/mypy; ไม่เพิ่มไฟล์ใน repo VELA; project config อยู่นอก repo เป็น TOML |
 | D-008 | เป้าหมายหลัก: แบ่งงานชัด ไม่ทับกัน ไม่ทำงานที่ทำไปแล้วซ้ำ และแบ่งทรัพยากรเครื่อง | scope claim, task dedup, slot และ cgroup limits เป็นงาน Phase 1 ([Execution Design](EXECUTION_DESIGN.md) §8) |
 | D-009 | ใช้ subscription แผน 20 USD | ไม่เกิน 1 session ต่อ provider; quota หมดเป็นสถานะปกติ (WAITING_QUOTA) ไม่ใช่ error |
-| D-010 | Runtime commit ได้ใน clone ของ attempt | snapshot อยู่ใน clone และ `refs/navis/*` ของ repo หลักเท่านั้น; branch ของผู้ใช้, push, merge และ deploy ยังเป็นของผู้ใช้ |
-| D-011 | ชื่อโปรเจกต์คือ Navis | repo/folder ชื่อ `PROJECT_NAVIS`; CLI, config dir, refs และ systemd units ใช้ `navis` |
+| D-010 | Runtime commit ได้ใน clone ของ attempt | snapshot อยู่ใน clone และ `refs/axon/*` ของ repo หลักเท่านั้น; branch ของผู้ใช้, push, merge และ deploy ยังเป็นของผู้ใช้ |
+| D-011 | ชื่อโปรเจกต์คือ Axon (เดิม Navis, เปลี่ยน 2026-10-07 เพราะฟังคล้าย Jarvis) | repo/folder ชื่อ `PROJECT_AXON`; CLI, config dir, refs และ systemd units ใช้ `axon` |
 | D-012 | Core เขียนด้วย Python | Python ≥ 3.11 (ตรงกับ VELA) ใช้ stdlib ก่อน |
 | D-013 | สร้างและทดสอบกับ `fake-agent` ให้เสร็จก่อนใช้ CLI จริง | probes ที่ใช้ quota (Execution Design §10) เลื่อนไปหลัง Runtime ผ่าน acceptance scenarios กับ fake แล้ว |
-| D-014 | Merge: ผู้ใช้สั่ง, Runtime รวมงานบน integration branch ของ Navis | Runtime rebase/merge ผลของ task บน `refs/navis/integration/<project>` แล้วรัน check ซ้ำบน commit สุดท้าย; ผู้ใช้ fast-forward เข้า branch ของตัวเองเอง (CLI ก่อน, GUI ภายหลัง) Runtime ไม่แตะ branch หรือ working tree ของผู้ใช้ และไม่มี auto-merge ใน MVP (OD-008) |
+| D-014 | Merge: ผู้ใช้สั่ง, Runtime รวมงานบน integration branch ของ Axon | Runtime rebase/merge ผลของ task บน `refs/axon/integration/<project>` แล้วรัน check ซ้ำบน commit สุดท้าย; ผู้ใช้ fast-forward เข้า branch ของตัวเองเอง (CLI ก่อน, GUI ภายหลัง) Runtime ไม่แตะ branch หรือ working tree ของผู้ใช้ และไม่มี auto-merge ใน MVP (OD-008) |
 
 ## ข้อเสนอที่ยังไม่ได้ล็อก
 

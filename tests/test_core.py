@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from navis.core import ControlError, Runtime, normalize_scope, overlap
+from axon.core import ControlError, Runtime, normalize_scope, overlap
 
 
 class CoreTests(unittest.TestCase):

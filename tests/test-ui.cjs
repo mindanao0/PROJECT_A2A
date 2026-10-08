@@ -11,7 +11,7 @@ const node = selector => {
 const context = vm.createContext({document:{querySelector:node,querySelectorAll:()=>[],addEventListener(type,callback){listeners.set(type,callback);},title:'',hidden:false},
   window:{},location:{hash:'',pathname:'/'},history:{replaceState(){}},URLSearchParams,Date,console,setTimeout(){return 0;},clearTimeout,setInterval(){},navigator:{},
   FormData: class {constructor(form){this.form=form;}*[Symbol.iterator](){yield* Object.entries(this.form.fields);}}});
-let source = fs.readFileSync('navis/web/app.js','utf8');
+let source = fs.readFileSync('axon/web/app.js','utf8');
 assert(source.endsWith('start();\n'));
 source = source.slice(0,-'start();\n'.length);
 vm.runInContext(source,context);

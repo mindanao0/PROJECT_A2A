@@ -6,10 +6,10 @@
 
 ```text
 Runtime (สิทธิ์ผู้ใช้, อยู่นอก sandbox)
- └─ systemd-run --user --scope  navis-<attempt>.scope   ← จำกัด RAM/CPU/PIDs; Kill = stop ทั้ง cgroup
+ └─ systemd-run --user --scope  axon-<attempt>.scope   ← จำกัด RAM/CPU/PIDs; Kill = stop ทั้ง cgroup
      └─ bwrap (attempt sandbox)                        ← เห็นเฉพาะ clone ของ attempt + agent home
          └─ agent CLI: codex exec / claude -p          ← ออกเน็ตไป provider ได้
-             ├─ MCP stdio: navis mcp ──Unix socket ของ attempt──▶ Runtime
+             ├─ MCP stdio: axon mcp ──Unix socket ของ attempt──▶ Runtime
              └─ คำสั่งที่ agent รัน
                   Codex : sandbox ของ Codex (workspace-write) — ไม่มีเน็ต เขียนได้เฉพาะ workspace
                   Claude: ไม่มี Bash — รันได้เฉพาะ run_check ผ่าน MCP
@@ -21,7 +21,7 @@ Runtime (สิทธิ์ผู้ใช้, อยู่นอก sandbox)
 Runtime เป็น MCP stdio server ต่อ attempt; ไม่ parse ข้อความอิสระของ model เป็นคำสั่ง
 
 - Claude: `claude -p --output-format stream-json --mcp-config <attempt>/mcp.json --strict-mcp-config`
-- Codex: `codex exec --json -c 'mcp_servers.navis.command="navis"' -c 'mcp_servers.navis.args=["mcp"]'`
+- Codex: `codex exec --json -c 'mcp_servers.axon.command="axon"' -c 'mcp_servers.axon.args=["mcp"]'`
 - Config ทุกไฟล์อยู่ใน state dir ของ Runtime ไม่เขียนลง repo ของ project
 
 Tools Phase 1 แทน message types 14 แบบ:
@@ -50,10 +50,10 @@ Phase 2 เพิ่ม `delegate(title, spec, scope)` ส่วนการข�
 | `run_check` / verifier | ไม่มี | bwrap `--unshare-net` | verified |
 | `prepare` (ติดตั้ง dependency) | มี | step แยก; auto-allow เฉพาะเมื่อ lockfile ไม่เปลี่ยนจาก base นอกนั้น WAITING_APPROVAL | — |
 
-- Claude ใช้ `--permission-mode acceptEdits`, `--allowedTools` เฉพาะ Read/Edit/Write/Glob/Grep และ `mcp__navis`, ส่วน tool อื่น disallow; ตรวจรายการ tool จริงจาก init event ของ stream
+- Claude ใช้ `--permission-mode acceptEdits`, `--allowedTools` เฉพาะ Read/Edit/Write/Glob/Grep และ `mcp__axon`, ส่วน tool อื่น disallow; ตรวจรายการ tool จริงจาก init event ของ stream
 - Check ใช้ dependency ที่ `prepare` ติดตั้งไว้แบบ offline (VELA: `uv run --offline --frozen`); uv cache bind แบบ rw เฉพาะตอน `prepare`
 - Web research: เปิดตามคำขอผู้ใช้ (2026-10-07) ผ่าน tool ค้น/อ่านเว็บของ CLI เท่านั้น; คำสั่งของ agent และ checks ยังไม่มีเน็ต ความเสี่ยงที่ยอมรับ: หน้าเว็บอาจมีคำสั่งแฝง (prompt injection) และ agent อาจส่งโค้ดออกผ่าน URL ได้ ปิดด้วย `[agents] web = false`
-- Folder นอก repo: `[sandbox] rw = [...]` ในไฟล์ project bind แบบเขียนได้ให้ attempt และ chat (+`--add-dir` ให้ CLI) แก้แบบสดโดยไม่ผ่าน diff/review/apply และ Navis ย้อนให้ไม่ได้; ปฏิเสธ home หรือสูงกว่า, state ของ Navis, ตัว repo เอง และ folder credential (`.ssh`, `.gnupg`, `.aws`, …); review task ไม่ได้สิทธิ์นี้
+- Folder นอก repo: `[sandbox] rw = [...]` ในไฟล์ project bind แบบเขียนได้ให้ attempt และ chat (+`--add-dir` ให้ CLI) แก้แบบสดโดยไม่ผ่าน diff/review/apply และ Axon ย้อนให้ไม่ได้; ปฏิเสธ home หรือสูงกว่า, state ของ Axon, ตัว repo เอง และ folder credential (`.ssh`, `.gnupg`, `.aws`, …); review task ไม่ได้สิทธิ์นี้
 
 ## 3. Credentials
 
@@ -68,10 +68,10 @@ Phase 2 เพิ่ม `delegate(title, spec, scope)` ส่วนการข�
 
 Worktree แชร์ `.git/config` และ `.git/hooks` กับ checkout หลัก agent ที่เขียน hook ได้จะรันโค้ดใน checkout ของผู้ใช้ จึงไม่ใช้ worktree กับ agent
 
-1. `git clone --shared <project> <state>/attempts/<id>/repo` แล้ว checkout branch `navis/<task>/<attempt>` จาก base commit — objects แชร์ผ่าน alternates ไม่ copy
+1. `git clone --shared <project> <state>/attempts/<id>/repo` แล้ว checkout branch `axon/<task>/<attempt>` จาก base commit — objects แชร์ผ่าน alternates ไม่ copy
 2. Sandbox: repo หลัก ro-bind (alternates ต้องอ่าน), clone rw; เขียน hooks/objects ของ repo หลัก → read-only (verified)
 3. Snapshot: `git -c core.hooksPath=/dev/null commit` รัน **ใน sandbox เดียวกัน** เพราะ config/hooks ของ clone เป็น untrusted (verified)
-4. ส่งผลออก: `git bundle create out.bundle <base>..HEAD` ใน sandbox แล้ว Runtime ข้างนอก `git fetch out.bundle HEAD:refs/navis/attempts/<id>`; ไม่รัน git ใน clone จากนอก sandbox (verified)
+4. ส่งผลออก: `git bundle create out.bundle <base>..HEAD` ใน sandbox แล้ว Runtime ข้างนอก `git fetch out.bundle HEAD:refs/axon/attempts/<id>`; ไม่รัน git ใน clone จากนอก sandbox (verified)
 5. Merge เข้า branch ของผู้ใช้เป็นของผู้ใช้ (OD-008)
 6. ลบ clone หลัง fetch ผลแล้วตาม retention
 
@@ -111,7 +111,7 @@ Verified: ผู้ใช้อยู่ในกลุ่ม `docker`; sandbox 
 
 ## 9. Project config (ตัวอย่าง VELA)
 
-อยู่นอก repo ที่ `~/.config/navis/projects/vela.toml` — ไม่เพิ่มไฟล์ใน VELA และ VELA ห้ามไฟล์ `.json`
+อยู่นอก repo ที่ `~/.config/axon/projects/vela.toml` — ไม่เพิ่มไฟล์ใน VELA และ VELA ห้ามไฟล์ `.json`
 
 ```toml
 path = "~/code/PROJECT_VELA"

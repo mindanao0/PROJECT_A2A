@@ -1,4 +1,4 @@
-"""`navis` / `python -m navis`: the GUI when run alone, otherwise the command line (navis.cli). Stdlib only, Python 3.11+."""
+"""`axon` / `python -m axon`: the GUI when run alone, otherwise the command line (axon.cli). Stdlib only, Python 3.11+."""
 import argparse
 import os
 from pathlib import Path
@@ -23,11 +23,11 @@ def private_dir(path):
 
 def gui_args(parser):
     parser.add_argument("--port", type=int, help="loopback port (default: [server] port in config.toml, 8765; 0 = any free port)")
-    parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "navis")
+    parser.add_argument("--state-dir", type=Path, default=Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "axon")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--sim", action="store_true", help="simulation only: a fake agent, no repositories, no sandbox")
     parser.add_argument("--real", action="store_true", help=argparse.SUPPRESS)  # the default now; kept for old scripts
-    parser.add_argument("--no-runner", action="store_true", help="GUI only; run the agents with `navis run` in a terminal")
+    parser.add_argument("--no-runner", action="store_true", help="GUI only; run the agents with `axon run` in a terminal")
 
 
 def run_gui(args):
@@ -49,8 +49,8 @@ def run_gui(args):
         try:  # already running (e.g. the service): open that one
             launch = launch_file.read_text().strip()
         except OSError:
-            raise SystemExit("Another Navis instance is already using this state directory")
-        print(f"Navis is already running: {launch}", file=sys.stderr)
+            raise SystemExit("Another Axon instance is already using this state directory")
+        print(f"Axon is already running: {launch}", file=sys.stderr)
         if not args.no_browser:
             webbrowser.open(launch)
         return 0
@@ -77,8 +77,8 @@ def run_gui(args):
     fd = os.open(launch_file, os.O_CREAT | os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as stream:
         stream.write(launch + "\n")
-    print("Navis · SIMULATION ONLY · no provider sessions or workspace writes" if args.sim
-          else "Navis · agents run sandboxed on your projects", flush=True)
+    print("Axon · SIMULATION ONLY · no provider sessions or workspace writes" if args.sim
+          else "Axon · agents run sandboxed on your projects", flush=True)
     print(f"Open locally: {launch}", flush=True)
     for host in cfg["hosts"]:
         print(f"Remote: https://{host} (password sign-in)", flush=True)

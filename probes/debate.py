@@ -6,7 +6,7 @@
 Conditions, all at the lowest settings (Claude haiku/low, Codex low), scored by HIDDEN tests on the final commit:
   direct   Claude implements the requirement
   debate   Claude writes notes/plan.md, Codex appends a critique, Claude implements following both
-No debate system exists in Navis: the chain is three ordinary tasks joined with --after and verified per task with
+No debate system exists in Axon: the chain is three ordinary tasks joined with --after and verified per task with
 --check, which is the point of the experiment: measure before building anything."""
 
 import argparse
@@ -225,8 +225,8 @@ def run_cell(name, task, condition, rep, agents_dir):
     (work / "cfg/projects/p.toml").write_text(
         f'path = "{proj}"\n[checks]\nok = "python3 -m unittest discover -s tests -q"\nnotes = "test -s notes/plan.md"\n')
     (work / "cfg/config.toml").write_text('[agents]\nclaude_model = "claude-haiku-4-5-20251001"\nclaude_effort = "low"\ncodex_effort = "low"\n')
-    os.environ.update(NAVIS_HOME=str(work / "home"), NAVIS_CONFIG=str(work / "cfg"))
-    from navis import runtime, usage
+    os.environ.update(AXON_HOME=str(work / "home"), AXON_CONFIG=str(work / "cfg"))
+    from axon import runtime, usage
     s = runtime.open_store()
     rt = runtime.Runtime(s)
     t0 = time.time()
@@ -261,7 +261,7 @@ def main():
     args = ap.parse_args()
     if args.selftest:
         selftest()
-    agents_dir = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "navis" / "agents"
+    agents_dir = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "axon" / "agents"
     results = []
     for rep in range(1, args.reps + 1):
         for name in args.tasks.split(","):

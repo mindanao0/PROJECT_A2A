@@ -1,8 +1,8 @@
-# Navis Local GUI
+# Axon Local GUI
 
 สถานะ: **GUI foundation / simulation only** — ทำหน้าควบคุมและ state contract ที่ลองใช้งานได้ก่อนมี production Agent Runner ตาม D-012/D-013
 
-ธีม: **Cybernetics ดำ–แดง** — ใช้โลโก้ NAVIS จากภาพอ้างอิงโดยตรงทั้ง sidebar และ command masthead, พื้นดำลึก, แดงสด, circuit traces, กรอบ HUD และแสงแดง; สถานะ connection/mode/dispatch อ่านจาก runtime จริง วง HUD หมุนช้าและหยุดเมื่อ offline/pause หรือผู้ใช้เปิด reduced motion; asset ทั้งหมดอยู่ในโปรเจกต์ ไม่โหลด font หรือภาพจากภายนอก
+ธีม: **Cybernetics ดำ–แดง** — โลโก้ AXON (`axon-wordmark.svg`) วาดเป็น SVG ตามสไตล์โลโก้อ้างอิงเดิม (ตัวหนาเหลี่ยม รอยแยก glitch แนวนอน เศษแดง) ใช้ทั้ง sidebar และ command masthead, พื้นดำลึก, แดงสด, circuit traces, กรอบ HUD และแสงแดง; สถานะ connection/mode/dispatch อ่านจาก runtime จริง วง HUD หมุนช้าและหยุดเมื่อ offline/pause หรือผู้ใช้เปิด reduced motion; asset ทั้งหมดอยู่ในโปรเจกต์ ไม่โหลด font หรือภาพจากภายนอก
 
 ไม่ใช่รายงานว่า Phase 1 ผ่านแล้ว: ไม่มี provider CLI, sandbox, cgroup, workspace clone, MCP, local inference หรือ real verifier ใน implementation นี้ `fake-agent` ใน GUI เป็น in-process simulation ไม่ใช่ fake-agent CLI ที่มี edit/orphan/crash scenarios ใน Execution Design §6
 
@@ -11,15 +11,15 @@
 ต้องมี Python 3.11 ขึ้นไป ไม่ต้องติดตั้ง Python dependencies, Node หรือ frontend build tool เพื่อเปิด GUI จาก source:
 
 ```bash
-git clone https://github.com/mindanao0/PROJECT_NAVIS.git
-cd PROJECT_NAVIS
-python3 -m navis --sim   # simulation; ไม่ใส่ --sim = runtime จริง (ดู README)
+git clone https://github.com/mindanao0/PROJECT_AXON.git
+cd PROJECT_AXON
+python3 -m axon --sim   # simulation; ไม่ใส่ --sim = runtime จริง (ดู README)
 ```
 
 ระบบเปิด browser พร้อม launch link ของ instance นั้น ถ้าเครื่องไม่เปิด browser อัตโนมัติ:
 
 ```bash
-python3 -m navis --sim --no-browser
+python3 -m axon --sim --no-browser
 ```
 
 คัดลอก **link เต็มที่พิมพ์ใน terminal** ไปเปิดบน browser ของเครื่องเดียวกัน ห้ามแชร์ launch link เพราะมีสิทธิ์ควบคุม instance นั้นผ่าน token ใน fragment
@@ -27,24 +27,24 @@ python3 -m navis --sim --no-browser
 เลือก port ได้ (โหมดจริง default 8765 จาก `[server] port`; simulation สุ่ม) แต่เลือก bind address ไม่ได้ (ล็อกเป็น `127.0.0.1`):
 
 ```bash
-python3 -m navis --port 8765
+python3 -m axon --port 8765
 ```
 
 ใช้ state สำหรับทดลองแยกจาก state ปกติ:
 
 ```bash
-python3 -m navis --sim --state-dir ~/.local/state/navis-demo
+python3 -m axon --sim --state-dir ~/.local/state/axon-demo
 ```
 
-Directory ต้องเป็นของผู้ใช้ปัจจุบันและ permission `0700`; path ที่ไม่ปลอดภัยจะถูกปฏิเสธ ไม่แก้ permission ของ directory เดิมอัตโนมัติ ข้อมูล default อยู่ใน `$XDG_STATE_HOME/navis` หรือ `~/.local/state/navis` เมื่อไม่ตั้งตัวแปร instance เดียวใช้ state dir ได้ครั้งละหนึ่งตัว
+Directory ต้องเป็นของผู้ใช้ปัจจุบันและ permission `0700`; path ที่ไม่ปลอดภัยจะถูกปฏิเสธ ไม่แก้ permission ของ directory เดิมอัตโนมัติ ข้อมูล default อยู่ใน `$XDG_STATE_HOME/axon` หรือ `~/.local/state/axon` เมื่อไม่ตั้งตัวแปร instance เดียวใช้ state dir ได้ครั้งละหนึ่งตัว
 
-ถ้าต้องการติดตั้งคำสั่ง `navis` ใช้ virtual environment:
+ถ้าต้องการติดตั้งคำสั่ง `axon` ใช้ virtual environment:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
-navis
+axon
 ```
 
 ปิดด้วย Ctrl+C ใน terminal ที่รันอยู่ ข้อมูล task/event ยังอยู่ แต่ token จะเปลี่ยนทุกครั้งที่เปิด และ launch file จะถูกลบเมื่อปิดปกติ
@@ -103,7 +103,7 @@ navis
 
 ## Persistence และ reconnect
 
-Core อยู่ใน `navis/core.py` แยกจาก UI/HTTP; SQLite transaction เดียวบันทึก snapshot และ event เมื่อคำสั่งสำเร็จ ข้อมูลอยู่ใน `control.sqlite3` ไม่เขียน config ลง VELA
+Core อยู่ใน `axon/core.py` แยกจาก UI/HTTP; SQLite transaction เดียวบันทึก snapshot และ event เมื่อคำสั่งสำเร็จ ข้อมูลอยู่ใน `control.sqlite3` ไม่เขียน config ลง VELA
 
 UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor และส่งครั้งละไม่เกิน 300 รายการเพื่อ backpressure snapshot ไม่ส่ง artifact body หรือ full event output; เมื่อเปิด task UI ขอ `/api/tasks/<task_id>` เพื่ออ่าน evidence และ output ของ task นั้น และจะขอใหม่เมื่อ `updated_at` เปลี่ยน UI แสดง event ล่าสุด 1,000 รายการ แต่ event เก่ายังอยู่ใน database การ disconnect browser ไม่ยกเลิก task และเมื่อเชื่อมใหม่ในหน้าเดิมจะอ่านต่อจาก cursor เดิม
 
@@ -113,14 +113,14 @@ UI poll snapshot/event ทุก 1.5 วินาที; event ใช้ cursor 
 
 ## Local authorization boundary
 
-- HTTP bind `127.0.0.1` เท่านั้น; เข้าจากเครื่องอื่นได้ทาง proxy บนเครื่องนี้ (`tailscale serve`, ดู `navis remote`) ซึ่งต้องตั้งรหัสผ่านก่อน (`navis passwd`) และ sign in ที่หน้า login: `POST /api/login` ตรวจ PBKDF2-SHA256 (600k รอบ) ทีละครั้ง ผิดแล้วหน่วง 1 วินาที สำเร็จได้ session cookie แบบเดียวกับ launch link (+`Secure` เมื่อผ่าน https)
+- HTTP bind `127.0.0.1` เท่านั้น; เข้าจากเครื่องอื่นได้ทาง proxy บนเครื่องนี้ (`tailscale serve`, ดู `axon remote`) ซึ่งต้องตั้งรหัสผ่านก่อน (`axon passwd`) และ sign in ที่หน้า login: `POST /api/login` ตรวจ PBKDF2-SHA256 (600k รอบ) ทีละครั้ง ผิดแล้วหน่วง 1 วินาที สำเร็จได้ session cookie แบบเดียวกับ launch link (+`Secure` เมื่อผ่าน https)
 - API ทั้งอ่านและเขียนต้องมี per-launch random bearer token หรือ browser session cookie ของ instance ปัจจุบัน; session bootstrap ต้องใช้ bearer และ exact Origin, cookie อย่างเดียว bootstrap ไม่ได้
-- Host ต้องตรง `127.0.0.1:<port>`/`localhost:<port>` หรือชื่อใน `[server] hosts` (ที่ `navis remote` ใส่ให้); ป้องกัน DNS rebinding; ชื่อ remote ใช้ไม่ได้ถ้ายังไม่มีรหัสผ่าน
+- Host ต้องตรง `127.0.0.1:<port>`/`localhost:<port>` หรือชื่อใน `[server] hosts` (ที่ `axon remote` ใส่ให้); ป้องกัน DNS rebinding; ชื่อ remote ใช้ไม่ได้ถ้ายังไม่มีรหัสผ่าน
 - POST ต้องมี exact same Origin และ JSON content type; ไม่มี permissive CORS
 - ขนาด request ไม่เกิน 16 KiB; task/project/text มีขีดจำกัด
 - Static assets เป็น allowlist และมี CSP, no-store, no-referrer, frame-ancestors none
 - State dir `0700`, DB/launch file `0600`, advisory process lock ป้องกันสอง instance
-- ไม่มี endpoint สำหรับ shell, file access, push, merge หรือ deploy; Agent chat (`/api/chat/ws`) เป็น WebSocket เข้า tmux session `navis-chat-*` ที่ agent รันใน sandbox เท่านั้น (ต้องมี session + exact Origin)
+- ไม่มี endpoint สำหรับ shell, file access, push, merge หรือ deploy; Agent chat (`/api/chat/ws`) เป็น WebSocket เข้า tmux session `axon-chat-*` ที่ agent รันใน sandbox เท่านั้น (ต้องมี session + exact Origin)
 - CSP อนุญาต inline style (xterm.js เขียน `<style>` เอง) แต่ script/connect/img ยังเป็น `self` เท่านั้น
 
 Boundary นี้เป็น local single-user GUI foundation ไม่ได้พิสูจน์ production authentication ของ agent sockets เมื่อเพิ่ม sandbox/agent processes ต้องซ่อน control socket/transport จาก attempt และทำ authorization ตาม MVP Contract ห้ามเปิด remote ด้วยการแก้ bind addressเฉย ๆ
@@ -133,15 +133,15 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 | ส่งต่องาน | เลือกงานต้นทางจาก dropdown และ Continue task ได้ใน simulation; Claude/Codex buttons disabled เพราะยังไม่มี adapters |
 | เหตุผลรอคิว | snapshot ส่งเหตุผล paused, scope พร้อม task ที่บล็อก, slot เต็ม, ready และ cooldown; UI เปิด blocking task ได้ |
 | Output / prompt | แสดง full artifacts `kind=agent_log` / `kind=prompt` เมื่อ Runtime ส่งมา; รุ่นนี้ไม่มีไฟล์เหล่านี้ จึงแสดง runtime messages และ task instructions พร้อมบอกว่าไม่ใช่ model output/prompt |
-| ผลและ merge | Copy full result; Copy merge command แสดงเฉพาะ real-mode completed task ที่ส่ง `result_ref` เป็น `refs/navis/attempts/...` แบบไม่มี shell metacharacters ไม่มี endpoint execute/merge และ simulation ไม่สร้าง ref |
+| ผลและ merge | Copy full result; Copy merge command แสดงเฉพาะ real-mode completed task ที่ส่ง `result_ref` เป็น `refs/axon/attempts/...` แบบไม่มี shell metacharacters ไม่มี endpoint execute/merge และ simulation ไม่สร้าง ref |
 | Quota | Countdown ใน task/card และ fake-agent row; แยก task cooldown จาก provider cooldown จริงที่ยังไม่มีข้อมูล |
 | Resources | Slot และ active attempts จาก snapshot; RAM เป็น Not measured ไม่แสดงค่าที่เดา |
 | Add project | ซ่อนเมื่อ snapshot mode เป็น real; simulation ยังใช้ได้ |
 | Stop/Kill | Native confirmation dialog, Cancel ไม่ส่ง command, ยึด observed attempt |
 | Event | filter task/type และเปิด full `output` ถ้า event มี field นี้; simulation ยังไม่มี prepare/check stdout จริง |
 | Real runtime controls | Banner เปลี่ยนตาม mode; REVIEW เปิด diff โดยตรงและแสดง approval; WAITING_INPUT แสดง input หรือแจ้งเมื่อ runtime ยังไม่ส่ง prompt; handoff เปิดเมื่อ `capabilities.handoff` ระบุพร้อมใช้งาน |
-| Integration (real) | งานที่ COMPLETED มีปุ่ม **Add to integration branch**: Runtime รวมผลบน `refs/navis/integration/<project>` และรัน check บน commit ที่รวมแล้ว; แถบ **Fast-forward <branch>** ในหน้า Overview/Task board เปิดเมื่อมี check ผ่านบน commit นั้นพอดี, working tree สะอาด และ branch ไม่ขยับ พร้อม dialog ยืนยัน (ไม่ push, ไม่รัน hooks) ไม่มีในโหมด simulation; ทดสอบด้วย `tests/gui-real-smoke.cjs` |
-| Model และ effort (real) | Settings มีแผง **Model and effort** ต่อ agent (Claude, Codex): ช่อง model (มีรายการแนะนำ รับ id อื่นที่รูปแบบถูกต้อง) และ effort ตามระดับที่ CLI นั้นรองรับ (Claude: low–max; Codex: low–ultra); ว่าง = ค่าเริ่มต้นของ CLI ใช้กับ attempt ที่เริ่มหลังบันทึก; ฟอร์มสร้างงานมีช่อง Model/Effort แบบเลือกได้เพื่อ override เฉพาะงานนั้น (ลำดับ: override ของงาน > การตั้งค่า > ค่าเริ่มต้นของ CLI); รายละเอียดงานแสดง model/effort ที่ใช้ CLI: `navis-cli agent-options [claude\|codex] [--model M] [--effort E]`, `navis-cli add --model --effort` |
+| Integration (real) | งานที่ COMPLETED มีปุ่ม **Add to integration branch**: Runtime รวมผลบน `refs/axon/integration/<project>` และรัน check บน commit ที่รวมแล้ว; แถบ **Fast-forward <branch>** ในหน้า Overview/Task board เปิดเมื่อมี check ผ่านบน commit นั้นพอดี, working tree สะอาด และ branch ไม่ขยับ พร้อม dialog ยืนยัน (ไม่ push, ไม่รัน hooks) ไม่มีในโหมด simulation; ทดสอบด้วย `tests/gui-real-smoke.cjs` |
+| Model และ effort (real) | Settings มีแผง **Model and effort** ต่อ agent (Claude, Codex): ช่อง model (มีรายการแนะนำ รับ id อื่นที่รูปแบบถูกต้อง) และ effort ตามระดับที่ CLI นั้นรองรับ (Claude: low–max; Codex: low–ultra); ว่าง = ค่าเริ่มต้นของ CLI ใช้กับ attempt ที่เริ่มหลังบันทึก; ฟอร์มสร้างงานมีช่อง Model/Effort แบบเลือกได้เพื่อ override เฉพาะงานนั้น (ลำดับ: override ของงาน > การตั้งค่า > ค่าเริ่มต้นของ CLI); รายละเอียดงานแสดง model/effort ที่ใช้ CLI: `axon-cli agent-options [claude\|codex] [--model M] [--effort E]`, `axon-cli add --model --effort` |
 | Dependency, check ต่องาน, reviewer, usage (real) | ฟอร์มสร้างงานมี **Start after task** (งานรอจน task นั้น COMPLETED แล้วเริ่มจากผลของมัน) และ **Verified by** (ติ๊ก check ที่ใช้ตรวจเฉพาะงานนี้ สำหรับงานขนานที่ check ต้องใช้ไฟล์ของอีกฝั่ง; integrate ยังรันทุก check); รายละเอียดงานมี Review with Claude / Codex และ Continue with Codex / Claude (เปิดเมื่อ agent นั้น login), แสดง Verified by / Starts after, และแท็บ Attempts แสดง model·effort กับ token/ราคาที่ CLI เปิดเผยต่อ attempt; แถบ integration มีปุ่มรีวิวทั้งสอง agent; หน้า **Resources** มีตาราง Usage 24 ชั่วโมงต่อ agent × kind (ฟิลด์ที่ CLI ไม่เปิดเผยเป็น `-` ไม่ใช่ 0) |
 | Rollback, review ของ integration, revision, dependency (real) | แถบ integration มี **Discard** (ลบ integration branch; task ยัง COMPLETED) และ **Review with Claude** เมื่อ project ตั้ง `require_review` และ commit รวมยังไม่ได้รับ approve; งานที่ COMPLETED และถูกรีวิวว่า `changes` มี **Revise from review** (จำกัดรอบด้วย `limits.review_rounds`); งานที่รอ dependency แสดงเหตุผล `Waiting for task N` ใน queue reasons; สร้าง dependency ผ่าน CLI `add --after` หรือ bridge `after_task_id` (ยังไม่มีช่องในฟอร์ม) |
 | Provider/resource/settings | Agents อ่าน `providers` และ `cooldown_until`; Resources อ่าน `attempt.memory_bytes` หรือ `resources.attempt_memory_bytes`; Settings อ่าน `settings.editable/items` และส่ง `update_settings` เมื่อ runtime รองรับ |
@@ -151,9 +151,9 @@ Boundary นี้เป็น local single-user GUI foundation ไม่ได�
 
 Task board แสดง 12 cards ต่อ column ก่อนและมี Show more; Activity แสดง 100 events ก่อน (ถือไว้ไม่เกิน 1,000) เพื่อลดจำนวน DOM พร้อมกัน หน้าจอมือถือมี navigation แบบเลื่อนแนวนอน, responsive panels, touch targets, skip link, live announcements และ task-evidence tabs ใช้ arrow-key navigation. ยังไม่ได้ตรวจ rendering, keyboard/screen-reader กับ browser จริง หรือทำ performance benchmark ของ task จำนวนมาก. Runtime รุ่นนี้ยังเป็น simulation จึงไม่มี agent log, provider prompt, real cgroup samples, real handoff หรือ config writer; UI จะแสดง unavailable/error ตามความสามารถที่ runtime รายงานและไม่สร้างค่า telemetry เอง
 
-## โหมด real (`navis`, ค่าเริ่มต้น)
+## โหมด real (`axon`, ค่าเริ่มต้น)
 
-GUI เดียวกัน แต่ขับ runtime จริงผ่าน `navis/bridge.py` (interface `snapshot` / `task_detail` / `command` เดียวกับ simulation) งานรันใน sandbox (bwrap + cgroup) บน clone ของ project ผลลง `refs/navis/attempts/*` ไม่มี endpoint ที่ merge/push
+GUI เดียวกัน แต่ขับ runtime จริงผ่าน `axon/bridge.py` (interface `snapshot` / `task_detail` / `command` เดียวกับ simulation) งานรันใน sandbox (bwrap + cgroup) บน clone ของ project ผลลง `refs/axon/attempts/*` ไม่มี endpoint ที่ merge/push
 
 | ส่วนของ UI | ข้อมูลจริงที่ bridge ส่ง |
 | --- | --- |
@@ -161,10 +161,10 @@ GUI เดียวกัน แต่ขับ runtime จริงผ่าน
 | Task evidence (`/api/tasks/<id>`) | full patch (`git diff base head` ตัดที่ 200,000 ตัวอักษร) พร้อม `files[]` แยก `out_of_scope`/`protected`; `agent.log` (ท้าย 30,000 ไบต์) และ prompt จริงของ attempt ล่าสุด (redact credential แล้ว); output เต็มของ check/prepare |
 | Agents | `providers[]` พร้อมสถานะ login, slot และ `cooldown_until` จาก quota จริง |
 | Resources | slot ที่ใช้/ทั้งหมด และ `memory_bytes` ของ attempt ที่กำลังรัน อ่านจาก `memory.current` ของ cgroup |
-| Settings | แก้ slot ต่อ agent และ attempt timeout ได้ (เขียน `~/.config/navis/config.toml`; จำนวน slot ของ checks ต้อง restart) |
-| Add project | ชื่อ + path ที่เป็นรากของ Git repo; สร้าง `~/.config/navis/projects/<ชื่อ>.toml` โดย **ยังไม่มี check** ต้องเพิ่มเองในไฟล์ ไม่งั้นงานที่จบไม่ถูก verify ด้วยอะไรเลย |
+| Settings | แก้ slot ต่อ agent และ attempt timeout ได้ (เขียน `~/.config/axon/config.toml`; จำนวน slot ของ checks ต้อง restart) |
+| Add project | ชื่อ + path ที่เป็นรากของ Git repo; สร้าง `~/.config/axon/projects/<ชื่อ>.toml` โดย **ยังไม่มี check** ต้องเพิ่มเองในไฟล์ ไม่งั้นงานที่จบไม่ถูก verify ด้วยอะไรเลย |
 | Review with Claude | สร้าง **review task แบบอ่านอย่างเดียว** บน commit ผลพอดี: reviewer เห็น requirement, diff ที่ไม่เปลี่ยนแปลง และผล check ของ Runtime (ไม่เห็นบันทึกของ implementer) ใช้ tool แค่ Read/Glob/Grep; ถ้า reviewer แก้ไฟล์ verdict เป็นโมฆะ; verdict (approve / changes requested) แสดงในส่วน Reviews ของงานที่ถูกรีวิว; เปิดเมื่อ claude login |
-| Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ codex login ใน agent home ของ Navis |
+| Continue with Codex | สร้างงานใหม่ต่อจาก commit ผลของงานต้นทาง; เปิดเมื่อ codex login ใน agent home ของ Axon |
 | REVIEW | ไม่มีคำถามแยก UI เปิด diff ให้ตรวจแล้ว Approve/Reject (ผูกกับ attempt ที่เห็น) |
 | Stop/Kill | `capabilities.controls.graceful_stop = false`: ฆ่า process tree ทันที UI จึงแสดง "Terminate attempt" |
 | Apply to my folder | `git apply` ผลของงาน (`base..head`) ลง working tree ของ project แบบ uncommitted; all-or-nothing: ถ้างานของคุณแก้บรรทัดเดียวกันจะไม่เขียนอะไร; บันทึก event `applied` (`auto_apply = true` ในไฟล์ project = ทำเองหลังผ่าน checks) |
@@ -178,7 +178,7 @@ Core/transport/startup tests ใช้ standard library:
 
 ```bash
 python3 -m unittest discover -s tests -v
-node --check navis/web/app.js
+node --check axon/web/app.js
 node tests/test-ui.cjs
 ```
 
@@ -186,18 +186,18 @@ node tests/test-ui.cjs
 
 ```bash
 python3 -m pip install .
-navis --help
+axon --help
 ```
 
 Browser integration test เป็น optional dev dependency ต้องใช้ Node 18+ และ Playwright พร้อม Chromium; ติดตั้งไว้นอก repo ได้:
 
 ```bash
-npm install --prefix /tmp/navis-browser-check playwright
-/tmp/navis-browser-check/node_modules/.bin/playwright install chromium
-NODE_PATH=/tmp/navis-browser-check/node_modules node tests/gui-smoke.cjs
+npm install --prefix /tmp/axon-browser-check playwright
+/tmp/axon-browser-check/node_modules/.bin/playwright install chromium
+NODE_PATH=/tmp/axon-browser-check/node_modules node tests/gui-smoke.cjs
 ```
 
-Test นี้เปิด instance ด้วย temp state ของตัวเองแล้วทดสอบ reload/session, approval/input/stop/retry/kill และ confirmation cancellation, artifacts, search, projects, escaping, mobile form และ disconnect; ไม่แตะ state ปกติหรือ CLI account จริง `NAVIS_SCREENSHOT=/absolute/path/control-room.png` เป็น optional screenshot output
+Test นี้เปิด instance ด้วย temp state ของตัวเองแล้วทดสอบ reload/session, approval/input/stop/retry/kill และ confirmation cancellation, artifacts, search, projects, escaping, mobile form และ disconnect; ไม่แตะ state ปกติหรือ CLI account จริง `AXON_SCREENSHOT=/absolute/path/control-room.png` เป็น optional screenshot output
 
 GitHub Actions รัน unittest, JS syntax, pure UI rendering/control checks และ package installation บน Python 3.11/3.12/3.13; ไม่ได้รัน browser test หรือ provider probes
 

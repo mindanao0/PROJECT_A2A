@@ -1,7 +1,7 @@
 /* Optional browser integration checks. Install Playwright outside the repository:
- * npm install --prefix /tmp/navis-browser-check playwright
- * NODE_PATH=/tmp/navis-browser-check/node_modules node tests/gui-smoke.cjs
- * npx --prefix /tmp/navis-browser-check playwright install chromium
+ * npm install --prefix /tmp/axon-browser-check playwright
+ * NODE_PATH=/tmp/axon-browser-check/node_modules node tests/gui-smoke.cjs
+ * npx --prefix /tmp/axon-browser-check playwright install chromium
  */
 const { chromium } = require('playwright');
 const { spawn } = require('node:child_process');
@@ -11,8 +11,8 @@ const path = require('node:path');
 const assert = require('node:assert/strict');
 const wait = ms => new Promise(r => setTimeout(r, ms));
 (async () => {
-  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'navis-gui-'));
-  const server = spawn(process.env.PYTHON || 'python3', ['-m','navis','--sim','--no-browser','--state-dir',folder], {stdio:'ignore'});
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'axon-gui-'));
+  const server = spawn(process.env.PYTHON || 'python3', ['-m','axon','--sim','--no-browser','--state-dir',folder], {stdio:'ignore'});
   let browser;
   try {
     for (let i=0;i<100&&!fs.existsSync(path.join(folder,'launch.url'));i++) await wait(100);
@@ -101,7 +101,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await page.getByRole('button',{name:'Ⅱ Pause dispatch',exact:true}).click();
     await page.getByRole('button',{name:'▷ Resume dispatch',exact:true}).waitFor();
     await page.getByRole('button',{name:'Add project',exact:true}).click();
-    await page.getByLabel('Project name',{exact:true}).fill('PROJECT_NAVIS');
+    await page.getByLabel('Project name',{exact:true}).fill('PROJECT_AXON');
     await page.locator('#project-dialog').getByRole('button',{name:'Add project',exact:true}).click();
     await page.locator('#project-dialog').waitFor({state:'hidden'});
     await page.getByRole('button',{name:'All projects',exact:true}).click();
@@ -123,13 +123,13 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
 
     // Fresh screenshot with clearly simulated, descriptive work.
     await send({action:'create_task',project_id:'project-vela',title:'Review context broker boundaries',spec:'Confirm local-only context routing in the simulation.',scope:'src/context/',scenario:'approval'});
-    await send({action:'create_task',project_id:snap.projects.find(p=>p.name==='PROJECT_NAVIS').id,title:'Design the agent control contract',spec:'Exercise lifecycle controls using fake-agent.',scope:'navis/',scenario:'success'});
+    await send({action:'create_task',project_id:snap.projects.find(p=>p.name==='PROJECT_AXON').id,title:'Design the agent control contract',spec:'Exercise lifecycle controls using fake-agent.',scope:'axon/',scenario:'success'});
     await send({action:'resume'});
     await wait(6500);
     await send({action:'pause'});
     await page.getByRole('button',{name:'Refresh',exact:true}).click();
     await wait(500);
-    if(process.env.NAVIS_SCREENSHOT){fs.mkdirSync(path.dirname(process.env.NAVIS_SCREENSHOT),{recursive:true});await page.screenshot({path:process.env.NAVIS_SCREENSHOT,fullPage:true});}
+    if(process.env.AXON_SCREENSHOT){fs.mkdirSync(path.dirname(process.env.AXON_SCREENSHOT),{recursive:true});await page.screenshot({path:process.env.AXON_SCREENSHOT,fullPage:true});}
     await page.setViewportSize({width:390,height:844});
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Mobile horizontal overflow');
     await page.getByRole('button',{name:'+ New task',exact:true}).click();
