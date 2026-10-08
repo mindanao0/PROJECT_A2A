@@ -55,7 +55,7 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 | Quota limit | `test_quota_waits_for_cooldown_without_using_a_retry` | ผ่าน |
 | Scope overlap / duplicate | `test_overlapping_scopes_never_run_together`, `test_duplicate_task_is_not_queued` | ผ่าน |
 | Local/remote boundary | `tests/test_server.py` (401/403, Origin, loopback only) | ผ่าน |
-| UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
+| UI disconnect | `tests/gui-smoke.cjs` (simulation, 2026-10-08 ผ่าน); `tests/gui-real-smoke.cjs` (runtime จริงกับ fake-agent, 2026-10-08 ผ่าน: create → integrate → discard → integrate → fast-forward) | ผ่าน (ทั้งสองโหมด) |
 | Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry), `test_task_stays_pinned_to_its_base_when_the_project_moves` (task ผูก base commit); stale integration commit เป็นงาน Phase 2 เพราะ Phase 1 ไม่ merge | ผ่าน (ขอบเขต Phase 1) |
 | Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
 | Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `axon-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
