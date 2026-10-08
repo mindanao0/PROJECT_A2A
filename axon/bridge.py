@@ -1,6 +1,6 @@
-"""Lets the GUI (navis.server) drive the real runtime.
+"""Lets the GUI (axon.server) drive the real runtime.
 
-Same interface as the simulated navis.core.Runtime: snapshot(cursor), task_detail(id), command(payload).
+Same interface as the simulated axon.core.Runtime: snapshot(cursor), task_detail(id), command(payload).
 """
 
 import hashlib
@@ -79,7 +79,7 @@ def memory_bytes(unit):
 
 class Bridge:
     def __init__(self, store=None, runner=True):
-        # runner=False: GUI only; agents are started by a separate `navis-cli run` on the same store.
+        # runner=False: GUI only; agents are started by a separate `axon-cli run` on the same store.
         self.runner = runner
         self.rt = runtime.Runtime(store)
         self.store = self.rt.store
@@ -134,7 +134,7 @@ class Bridge:
                         "cooldown_until": until, "capability": desc,
                         "reason": ("Local coding is off" if pid == "local" else "Not logged in") if not ok else None,
                         "message": (("Set coding = true under [local] in config.toml to allow local coding." if pid == "local" else
-                                     "Log in this agent's Navis account once, outside the GUI (see the README). "
+                                     "Log in this agent's Axon account once, outside the GUI (see the README). "
                                      "Your normal CLI login is not used.")) if not ok else
                                    "Provider cooldown starts when the CLI reports a quota or rate limit." if pid != "fake" else
                                    "Runs scripted scenarios inside the same sandbox as real agents."})
@@ -288,7 +288,7 @@ class Bridge:
             "artifacts": self.artifacts(t, aid, c["evidence"].get(tid, []), full, c["projects"]),
             "due": c["cool"].get(t["agent"], t["updated"]) if state == "WAITING_QUOTA" else None,
             "activity": t["note"] or state.replace("_", " ").title(),
-            "result_ref": f"refs/navis/attempts/{aid}" if state == "COMPLETED" and t["head"] and aid else None,
+            "result_ref": f"refs/axon/attempts/{aid}" if state == "COMPLETED" and t["head"] and aid else None,
             "source": json.loads(t["source"]) if t["source"] else None,
             "attempts": [{"id": a["id"], "started_at": a["started"], "ended_at": a["ended"], "backend": t["agent"],
                           "state": "RUNNING" if a["status"] == "running" else (a["outcome"] or "RUNNING"),

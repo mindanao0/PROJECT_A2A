@@ -1,4 +1,4 @@
-"""The everyday flow: a project found from the current folder, `navis init`, results written into your folder."""
+"""The everyday flow: a project found from the current folder, `axon init`, results written into your folder."""
 
 import contextlib
 import io
@@ -11,11 +11,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from navis import cli, runtime
-from test_navis import DONE, NavisTest, edit, step
+from axon import cli, runtime, sandbox
+from test_axon import DONE, AxonTest, edit, step
 
 
-class Everyday(NavisTest):
+class Everyday(AxonTest):
     def test_project_is_found_from_any_folder_inside_it(self):
         self.assertEqual(runtime.project_for(self.proj / "src"), "p")
         self.assertEqual(runtime.project_for(self.proj), "p")
@@ -26,10 +26,10 @@ class Everyday(NavisTest):
         tid = int(out.getvalue())
         self.assertEqual(self.task(tid)["project"], "p")
         self.assertEqual(self.task(tid)["scope"], '["."]')
-        self.assertIn("nothing is running tasks", err.getvalue())  # no GUI or `navis run` holds the runner lock
+        self.assertIn("nothing is running tasks", err.getvalue())  # no GUI or `axon run` holds the runner lock
         with mock.patch("os.getcwd", return_value=str(self.tmp)), self.assertRaises(SystemExit) as stop:
             cli.main(["add", "-a", "fake", "x"])
-        self.assertIn("navis init", str(stop.exception))
+        self.assertIn("axon init", str(stop.exception))
 
     def test_init_registers_the_repository_you_are_in(self):
         other = self.tmp / "My Repo"
@@ -85,7 +85,7 @@ class Everyday(NavisTest):
         self.assertFalse(runtime.runner_active())
 
 
-class OutsideFoldersAndWeb(NavisTest):
+class OutsideFoldersAndWeb(AxonTest):
     def rw(self, *paths):
         cfg = self.tmp / "cfg" / "projects" / "p.toml"
         cfg.write_text(cfg.read_text() + "[sandbox]\nrw = [" + ", ".join(f'"{x}"' for x in paths) + "]\n")
@@ -129,7 +129,7 @@ class OutsideFoldersAndWeb(NavisTest):
 
 
 @unittest.skipUnless(shutil.which("tmux"), "needs tmux")
-class ShellChat(NavisTest):
+class ShellChat(AxonTest):
     def test_shell_runs_in_the_sandboxed_clone(self):
         sock = self.enterContext(tempfile.TemporaryDirectory(dir="/tmp"))
         self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": sock}))
@@ -137,14 +137,48 @@ class ShellChat(NavisTest):
         self.addCleanup(subprocess.run, ["tmux", "kill-server"], capture_output=True)
         name = runtime.chat_start("p", "shell")
         self.addCleanup(runtime.chat_close, name)
-        subprocess.run(["tmux", "send-keys", "-t", name, "-l", f"pwd; touch {self.proj}/x; echo END-$((1+1))\n"], check=True)
+        subprocess.run(["tmux", "send-keys", "-t", name, "-l",
+                        f"pwd; touch {self.proj}/x; echo OBJ-$(git cat-file -t HEAD); echo END-$((1+1))\n"], check=True)
         for _ in range(50):
             screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
             if "END-2" in screen:
                 break
             time.sleep(0.1)
-        self.assertIn(str(runtime.data_dir() / "chats" / "p-shell" / "repo"), screen)  # works in its own clone
+        self.assertIn(f"\n{self.proj}\n", screen)  # its clone, shown at the project's path (resume lists that folder's sessions)
+        self.assertIn("OBJ-commit", screen)  # git works there: the clone has its own objects
+        self.assertTrue((runtime.data_dir() / "chats" / "p-shell" / "repo" / "x").exists())
         self.assertFalse((self.proj / "x").exists(), "your checkout is not reachable from the shell")
+
+    def test_a_chat_clone_from_before_gets_its_own_objects(self):
+        sock = self.enterContext(tempfile.TemporaryDirectory(dir="/tmp"))
+        self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": sock}))
+        os.environ.pop("TMUX", None)
+        self.addCleanup(subprocess.run, ["tmux", "kill-server"], capture_output=True)
+        repo = runtime.data_dir() / "chats" / "p-shell" / "repo"
+        sandbox.clone(str(self.proj), repo, "HEAD", "axon/chat/shell")  # shared, as chats were made before
+        self.addCleanup(runtime.chat_close, runtime.chat_start("p", "shell"))
+        self.assertFalse((repo / ".git" / "objects" / "info" / "alternates").exists())
+        self.assertEqual(subprocess.run(["git", "-C", str(repo), "cat-file", "-t", "HEAD"], capture_output=True,
+                                        text=True, env={**os.environ, "GIT_ALTERNATE_OBJECT_DIRECTORIES": ""}).stdout, "commit\n")
+
+
+    def test_a_command_over_the_memory_limit_does_not_end_the_chat(self):
+        sock = self.enterContext(tempfile.TemporaryDirectory(dir="/tmp"))
+        self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": sock}))
+        os.environ.pop("TMUX", None)
+        self.addCleanup(subprocess.run, ["tmux", "kill-server"], capture_output=True)
+        (self.tmp / "cfg" / "config.toml").write_text("[limits]\nchat_memory = \"100M\"\n")
+        name = runtime.chat_start("p", "shell")
+        self.addCleanup(runtime.chat_close, name)
+        subprocess.run(["tmux", "send-keys", "-t", name, "-l",
+                        "python3 -c 'x = b\"x\" * (1500 * 2**20)'; echo AFTER-$((1+1))\n"], check=True)
+        for _ in range(100):
+            screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
+            if "AFTER-2" in screen:
+                break
+            time.sleep(0.1)
+        self.assertIn("AFTER-2", screen, "the hog was killed but the shell, and so the chat, lives on")
+        self.assertIn(name, runtime.chat_sessions())
 
 
 if __name__ == "__main__":

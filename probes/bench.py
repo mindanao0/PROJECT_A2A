@@ -3,7 +3,7 @@
     python3 probes/bench.py --selftest                      # reference solutions vs hidden tests; no quota
     python3 probes/bench.py [--tasks a,b] [--configs claude,codex,pipeline]
 
-Each (task, config) runs in a fresh project and a fresh Navis state under a short /tmp dir. The agent sees
+Each (task, config) runs in a fresh project and a fresh Axon state under a short /tmp dir. The agent sees
 the requirement and a few visible tests (its `ok` check); the harness then runs hidden tests, in a
 sandbox without network, on the final result commit. Configs:
   claude / codex   one agent implements (Runner retries once if the visible check fails)
@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from navis import sandbox  # noqa: E402
+from axon import sandbox  # noqa: E402
 
 VISIBLE_HEAD = "import sys\nimport unittest\n\nsys.path.insert(0, 'src')\n"
 
@@ -193,8 +193,8 @@ def run_cell(name, task, config, agents_dir):
     (work / "cfg/projects/p.toml").write_text(
         f'path = "{proj}"\n[checks]\nok = "python3 -m unittest discover -s tests -q"\n')
     (work / "cfg/config.toml").write_text("[local]\ncoding = true\nmax_turns = 25\nnum_gpu = 99\n")
-    os.environ.update(NAVIS_HOME=str(work / "home"), NAVIS_CONFIG=str(work / "cfg"))
-    from navis import runtime, usage
+    os.environ.update(AXON_HOME=str(work / "home"), AXON_CONFIG=str(work / "cfg"))
+    from axon import runtime, usage
     s = runtime.open_store()
     rt = runtime.Runtime(s)
     scope = ["src", "tests"]
@@ -240,7 +240,7 @@ def main():
     args = ap.parse_args()
     if args.selftest:
         selftest()
-    agents_dir = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "navis" / "agents"
+    agents_dir = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "axon" / "agents"
     results = []
     for name in args.tasks.split(","):
         for config in args.configs.split(","):

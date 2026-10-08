@@ -100,12 +100,12 @@ def codex_limits(home):
 
 def claude_limits(home, cache):
     """{windows, as_of} from the endpoint Claude Code's /usage reads, while Claude's own login token is valid (Claude
-    renews it whenever it starts; Navis never rewrites the login). Otherwise the last answer, kept in `cache`."""
+    renews it whenever it starts; Axon never rewrites the login). Otherwise the last answer, kept in `cache`."""
     try:
         o = json.loads(Path(home, ".credentials.json").read_text())["claudeAiOauth"]
         if o["expiresAt"] / 1000 > time.time() + 60:
             req = urllib.request.Request(CLAUDE_USAGE, headers={"Authorization": "Bearer " + o["accessToken"],
-                                                                "anthropic-beta": "oauth-2025-04-20", "User-Agent": "navis"})
+                                                                "anthropic-beta": "oauth-2025-04-20", "User-Agent": "axon"})
             with urllib.request.urlopen(req, timeout=10) as r:
                 d = json.load(r)
             out = {"windows": [window(m, d[k]["utilization"], ts(d[k].get("resets_at")))

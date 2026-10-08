@@ -10,9 +10,9 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from navis import local_agent as la
-from navis import runtime, usage
-from test_navis import NavisTest
+from axon import local_agent as la
+from axon import runtime, usage
+from test_axon import AxonTest
 
 
 def call(_tool, **args):
@@ -224,7 +224,7 @@ class FakeModel(BaseHTTPRequestHandler):
         pass
 
 
-class Runner(NavisTest):
+class Runner(AxonTest):
     def setUp(self):
         super().setUp()
         FakeModel.answers, FakeModel.delay, FakeModel.hits = [], 0.0, 0
@@ -265,7 +265,7 @@ class Runner(NavisTest):
             runtime.add_task(self.store, "p", "local", "x", ["src"])
 
     def test_boundary_violations_by_the_model_are_denied_and_leave_nothing_on_the_host(self):
-        marker = Path.home() / f".navis-local-escape-{os.getpid()}"
+        marker = Path.home() / f".axon-local-escape-{os.getpid()}"
         FakeModel.answers = [call("write_file", path=str(marker), content="x"), call("write_file", path="../escape.txt", content="x"),
                              call("write_file", path=".git/hooks/pre-commit", content="x"), call("read_file", path="/etc/shadow"),
                              call("write_file", path="src/ok.py", content="ok = 1\n"), call("report_result", status="done", summary="d")]
@@ -330,7 +330,7 @@ class Runner(NavisTest):
         self.assertEqual(FakeModel.hits, 0)
 
     def test_a_local_reviewer_is_read_only_and_its_verdict_counts(self):
-        tid = self.add(__import__("test_navis").edit("src/x.py") + __import__("test_navis").DONE)
+        tid = self.add(__import__("test_axon").edit("src/x.py") + __import__("test_axon").DONE)
         self.run_all()
         FakeModel.answers = [call("write_file", path="src/evil.py", content="x"), call("read_file", path="src/x.py"),
                              call("report_result", status="failed", summary="src/x.py:1 needs a test")]

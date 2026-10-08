@@ -6,7 +6,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-APP = Path(__file__).resolve().parent.parent / "navis" / "web" / "app.js"
+APP = Path(__file__).resolve().parent.parent / "axon" / "web" / "app.js"
 
 
 @unittest.skipUnless(shutil.which("node"), "needs node")

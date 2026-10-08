@@ -8,7 +8,7 @@
 
 ## ที่สร้าง
 
-`navis/local_agent.py` เป็น agent process แบบ `python -m navis.local_agent` ที่รัน **ใน sandbox และ cgroup เดียวกับ Codex/Claude** จึงใช้ Stop/Kill, recovery, credential scan, usage accounting เดิมได้โดยไม่เขียนซ้ำ (adapter `local` ใน `runtime.py`)
+`axon/local_agent.py` เป็น agent process แบบ `python -m axon.local_agent` ที่รัน **ใน sandbox และ cgroup เดียวกับ Codex/Claude** จึงใช้ Stop/Kill, recovery, credential scan, usage accounting เดิมได้โดยไม่เขียนซ้ำ (adapter `local` ใน `runtime.py`)
 - **Model backend แยกจาก Agent Runner:** โมเดลอยู่หลัง Ollama บน loopback เท่านั้น (ปฏิเสธ URL อื่น ไม่มี fail over ไป cloud); Runner คือโค้ดของเราที่ควบคุม tool loop
 - **Tools:** `list_files`, `read_file`, `write_file`, `replace_in_file`, `run_check`, `report_result`, `ask_user`, `delegate` — ไม่มี shell ไม่มีเน็ต; รันคำสั่งได้เฉพาะ `run_check` ที่ project ตั้งไว้ ผ่าน MCP socket ของ attempt
 - **อ่านคำสั่งของโมเดล:** `qwen2.5-coder:7b` ใน Ollama **ไม่ส่ง `tool_calls` แบบโครงสร้าง** แต่พิมพ์ JSON เป็นข้อความ (และบางครั้งยัดหลายคำสั่งในข้อความเดียวก่อนเห็นผลคำสั่งแรก) Runner จึงแกะ JSON จากข้อความ (รวม code fence/ข้อความแทรก/รูปแบบ structured), ตรวจ schema ทุกครั้ง และรัน **เพียงคำสั่งแรกต่อข้อความ** — ยืนยันข้อความใน MVP Contract ว่า tool-calling ไม่เท่ากับ coding-agent
@@ -42,7 +42,7 @@
 ## การใช้ GPU (6 GB)
 
 ค่าเริ่มต้นของ Ollama วางโมเดลแบบ CPU/GPU 15%/85% ทั้งที่ VRAM ว่างเหลือ ~1.4 GB (CPU 720% GPU ~50% เพราะ GPU ต้องรอ layer บน CPU) แก้โดย
-1. `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` (KV cache เล็กลง) — ตั้งผ่าน systemd drop-in `~/.config/systemd/user/ollama.service.d/navis-gpu.conf` (ลบไฟล์เดียวเพื่อย้อนกลับ; service นี้ใช้ร่วมกับ PROJECT_VELA)
+1. `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0` (KV cache เล็กลง) — ตั้งผ่าน systemd drop-in `~/.config/systemd/user/ollama.service.d/axon-gpu.conf` (ลบไฟล์เดียวเพื่อย้อนกลับ; service นี้ใช้ร่วมกับ PROJECT_VELA)
 2. `[local] num_gpu = 99` บังคับให้ทุก layer ขึ้น GPU: `100% GPU`, 4.8 GB, **47 tok/s เทียบกับ 28 tok/s** (+67%)
 ค่า `num_gpu` ใน `config.toml` ของผู้ใช้ยังเป็น 0 (ให้ Ollama ตัดสินใจ); benchmark ตั้ง 99 ให้เอง บนเครื่องที่ VRAM น้อยกว่านี้ควรคงเป็น 0
 
@@ -50,7 +50,7 @@
 
 - ผลวัดเป็นของโมเดลเดียว (`qwen2.5-coder:7b`) ไม่ได้ลองโมเดลอื่นหรือ quantization อื่น และ VRAM 6 GB จำกัดขนาดโมเดล
 - ไม่มี streaming/ยกเลิกกลางคำตอบของโมเดล (ยกเลิกด้วยการฆ่า process ทั้ง tree) และไม่มี resume บทสนทนา (กู้คืนต่อจาก git snapshot ของ Runner)
-- Local helper ที่สรุป log (`navis-cli summarize`) กับ local coding ใช้ GPU ตัวเดียวกัน ยังไม่มีการจองคิว GPU ระหว่างกัน (slot `local` = 1 กันเฉพาะ coding ด้วยกันเอง)
+- Local helper ที่สรุป log (`axon-cli summarize`) กับ local coding ใช้ GPU ตัวเดียวกัน ยังไม่มีการจองคิว GPU ระหว่างกัน (slot `local` = 1 กันเฉพาะ coding ด้วยกันเอง)
 - เพดานบริบท 8192 tokens กับงานที่ต้องอ่านไฟล์ใหญ่จะตัด output เก่าทิ้ง
 
 ## คำแนะนำ

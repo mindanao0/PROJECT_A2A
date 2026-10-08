@@ -1,4 +1,4 @@
-"""navis command line. `navis` alone opens the GUI; `navis <command>` works from any folder, and a project
+"""axon command line. `axon` alone opens the GUI; `axon <command>` works from any folder, and a project
 is the one whose repository holds the current folder unless -p names another."""
 
 import argparse
@@ -15,8 +15,8 @@ from pathlib import Path
 from . import agent_options, helper, integrate, retention, runtime, sandbox, usage
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
-NEEDS_YOU = {"WAITING_INPUT": "answer it: navis answer {id}", "WAITING_APPROVAL": "approve it: navis approve {id}",
-             "REVIEW": "look at it in the GUI, then: navis approve {id} / navis reject {id}"}
+NEEDS_YOU = {"WAITING_INPUT": "answer it: axon answer {id}", "WAITING_APPROVAL": "approve it: axon approve {id}",
+             "REVIEW": "look at it in the GUI, then: axon approve {id} / axon reject {id}"}
 
 
 def ago(seconds):
@@ -28,7 +28,7 @@ def project_arg(name):
     """-p, else the project of the current folder."""
     name = name or runtime.project_for(os.getcwd())
     if not name:
-        sys.exit("this folder is not in a Navis project: run `navis init` in the repository, or pass -p NAME")
+        sys.exit("this folder is not in a Axon project: run `axon init` in the repository, or pass -p NAME")
     return name
 
 
@@ -118,7 +118,7 @@ def save_server(**values):
 def passwd():
     from .server import hash_password
     f = runtime.config_dir() / "password"
-    pw = getpass.getpass("New Navis password (empty removes it and turns remote access off): ")
+    pw = getpass.getpass("New Axon password (empty removes it and turns remote access off): ")
     if not pw:
         f.unlink(missing_ok=True)
         print("password removed")
@@ -131,12 +131,12 @@ def passwd():
     fd = os.open(f, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as out:
         out.write(hash_password(pw) + "\n")
-    print("password set; the GUI asks for it when you have no launch link (a running Navis picks it up at once)")
+    print("password set; the GUI asks for it when you have no launch link (a running Axon picks it up at once)")
 
 
 def remote(off):
     """Reach the GUI from your other devices on any network: `tailscale serve` puts it on https://<this machine>
-    inside your tailnet (not the public internet), and Navis allows that name once a password is set."""
+    inside your tailnet (not the public internet), and Axon allows that name once a password is set."""
     if not shutil.which("tailscale"):
         sys.exit("install Tailscale on this machine and your other devices first: https://tailscale.com/download")
     port = runtime.load_config()["server"]["port"]
@@ -146,7 +146,7 @@ def remote(off):
         print("remote access off")
         return
     if not (runtime.config_dir() / "password").exists():
-        sys.exit("set a password first: navis passwd")
+        sys.exit("set a password first: axon passwd")
     st = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True)
     try:
         host = json.loads(st.stdout)["Self"]["DNSName"].rstrip(".")
@@ -154,25 +154,25 @@ def remote(off):
         sys.exit(f"tailscale is not connected: {st.stderr.strip() or 'run `sudo tailscale up`'}")
     if subprocess.run(["tailscale", "serve", "--bg", str(port)]).returncode:
         sys.exit("tailscale serve failed. If it says access denied, run once: sudo tailscale set --operator=$USER\n"
-                 "If it asks to enable HTTPS, open the link it printed, then run navis remote again.")
+                 "If it asks to enable HTTPS, open the link it printed, then run axon remote again.")
     save_server(hosts=[host])
-    if subprocess.run(["systemctl", "--user", "try-restart", "navis"], capture_output=True).returncode == 0:
-        print("restarted the navis service with the new address")
+    if subprocess.run(["systemctl", "--user", "try-restart", "axon"], capture_output=True).returncode == 0:
+        print("restarted the axon service with the new address")
     else:
-        print("restart Navis if it is running, so it accepts the new address")
+        print("restart Axon if it is running, so it accepts the new address")
     print(f"open https://{host} on any device signed in to your tailnet (phone: the Tailscale app), then sign in")
 
 
 UNIT = """[Unit]
-Description=Navis: coding agents and their control GUI (127.0.0.1:{port})
+Description=Axon: coding agents and their control GUI (127.0.0.1:{port})
 After=network-online.target
 
 [Service]
-ExecStart={py} -m navis gui --no-browser
+ExecStart={py} -m axon gui --no-browser
 Environment=PATH={path}
 Environment=PYTHONPATH={pkg}
 Restart=on-failure
-# Only Navis itself stops; chats (tmux) and agents (their own scopes) are not killed with it.
+# Only Axon itself stops; chats (tmux) and agents (their own scopes) are not killed with it.
 KillMode=process
 
 [Install]
@@ -181,22 +181,22 @@ WantedBy=default.target
 
 
 def service(action):
-    """Run Navis in the background as a systemd user service: the GUI and the runner stay up without a terminal."""
-    unit = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user" / "navis.service"
+    """Run Axon in the background as a systemd user service: the GUI and the runner stay up without a terminal."""
+    unit = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user" / "axon.service"
     ctl = ["systemctl", "--user"]
     if action == "remove":
-        subprocess.run([*ctl, "disable", "--now", "navis"])
+        subprocess.run([*ctl, "disable", "--now", "axon"])
         unit.unlink(missing_ok=True)
         subprocess.run([*ctl, "daemon-reload"])
-        print("navis service removed")
+        print("axon service removed")
         return
     unit.parent.mkdir(parents=True, exist_ok=True)
     port = runtime.load_config()["server"]["port"]
     unit.write_text(UNIT.format(port=port, py=sys.executable, path=os.environ.get("PATH", "/usr/bin:/bin"), pkg=sandbox.PKG.parent))
     subprocess.run([*ctl, "daemon-reload"], check=True)
-    if subprocess.run([*ctl, "enable", "--now", "navis"]).returncode:
-        sys.exit(f"could not start it; see: journalctl --user -u navis -e")
-    print(f"navis runs in the background on http://127.0.0.1:{port}; `navis` opens it, logs: journalctl --user -u navis -f")
+    if subprocess.run([*ctl, "enable", "--now", "axon"]).returncode:
+        sys.exit(f"could not start it; see: journalctl --user -u axon -e")
+    print(f"axon runs in the background on http://127.0.0.1:{port}; `axon` opens it, logs: journalctl --user -u axon -f")
     linger = subprocess.run(["loginctl", "show-user", getpass.getuser(), "-p", "Linger", "--value"], capture_output=True, text=True)
     if linger.stdout.strip() != "yes":
         print("to keep it running after you log out and start it at boot, run once: loginctl enable-linger")
@@ -215,7 +215,7 @@ def doctor(name):
         report(tool, shutil.which(tool), "install it with your package manager")
     if bad:
         return 1
-    r = subprocess.run(sandbox.scope(f"navis-doctor-{os.getpid()}", "256M", sandbox.bwrap("/", net=False) + ["true"]),
+    r = subprocess.run(sandbox.scope(f"axon-doctor-{os.getpid()}", "256M", sandbox.bwrap("/", net=False) + ["true"]),
                        capture_output=True, text=True)
     report("sandbox (bwrap in a systemd scope)", r.returncode == 0, r.stderr.strip()[-300:])
     for agent in ("claude", "codex"):
@@ -229,9 +229,9 @@ def doctor(name):
         extra = str(exe.parent if agent == "claude" else exe.parent.parent)
         r = subprocess.run(sandbox.bwrap("/", rw=[home], ro=[extra]) + [str(exe), "--version"], capture_output=True, text=True, timeout=60)
         report(f"{agent}: runs inside the sandbox", r.returncode == 0, (r.stderr or r.stdout).strip()[-300:])
-        report(f"{agent}: logged in for Navis", (home / runtime.LOGIN_FILE[agent]).exists(),
-               "run: " + ("CLAUDE_CONFIG_DIR=~/.local/share/navis/agents/claude claude auth login" if agent == "claude"
-                          else "CODEX_HOME=~/.local/share/navis/agents/codex codex login --device-auth"))
+        report(f"{agent}: logged in for Axon", (home / runtime.LOGIN_FILE[agent]).exists(),
+               "run: " + ("CLAUDE_CONFIG_DIR=~/.local/share/axon/agents/claude claude auth login" if agent == "claude"
+                          else "CODEX_HOME=~/.local/share/axon/agents/codex codex login --device-auth"))
     names = [name] if name else [runtime.project_for(os.getcwd())] if runtime.project_for(os.getcwd()) else \
         sorted(f.stem for f in (runtime.config_dir() / "projects").glob("*.toml"))
     rt = runtime.Runtime(runtime.open_store())
@@ -266,16 +266,16 @@ def doctor(name):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help")):
-        argv = ["gui", *argv]  # `navis` alone (or with GUI flags) opens the GUI
-    ap = argparse.ArgumentParser(prog="navis", description="Run coding agents on separate, sandboxed tasks. "
-                                 "`navis` alone opens the GUI. Inside a project folder -p is not needed.",
-                                 epilog="start here: navis init (in a repository), navis add \"what to change\", navis logs -f ID")
+        argv = ["gui", *argv]  # `axon` alone (or with GUI flags) opens the GUI
+    ap = argparse.ArgumentParser(prog="axon", description="Run coding agents on separate, sandboxed tasks. "
+                                 "`axon` alone opens the GUI. Inside a project folder -p is not needed.",
+                                 epilog="start here: axon init (in a repository), axon add \"what to change\", axon logs -f ID")
     sub = ap.add_subparsers(dest="cmd", metavar="command")
     from .__main__ import gui_args
     gui_args(sub.add_parser("gui", help="open the control GUI (the default); starts it if it is not running"))
-    i = sub.add_parser("init", help="make the Git repository you are in a Navis project")
+    i = sub.add_parser("init", help="make the Git repository you are in a Axon project")
     i.add_argument("name", nargs="?", help="default: the folder name")
-    a = sub.add_parser("add", help="queue a task: navis add \"fix the login bug\"")
+    a = sub.add_parser("add", help="queue a task: axon add \"fix the login bug\"")
     a.add_argument("-p", "--project", help="default: the project of the current folder")
     a.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable; default: everything)")
@@ -285,7 +285,7 @@ def main(argv=None):
     a.add_argument("--effort", help="effort for this task only")
     a.add_argument("--check", action="append", dest="checks", metavar="NAME",
                    help="verify this task with only these project checks (repeatable); integration still runs all")
-    a.add_argument("-f", "--follow", action="store_true", help="then show the agent's output live, as `navis logs -f`")
+    a.add_argument("-f", "--follow", action="store_true", help="then show the agent's output live, as `axon logs -f`")
     a.add_argument("spec", help="what to do (short is fine), or - to read it from stdin")
     sub.add_parser("ls", help="list tasks (running ones show how long and when they last wrote output)")
     sub.add_parser("run", help="run tasks in this terminal, without the GUI (one runner per machine)")
@@ -333,7 +333,7 @@ def main(argv=None):
     sub.add_parser("passwd", help="set the password the GUI asks for (needed for remote access)")
     rm = sub.add_parser("remote", help="open the GUI to your other devices through Tailscale (any network)")
     rm.add_argument("--off", action="store_true")
-    sv = sub.add_parser("service", help="keep Navis running in the background (systemd user service)")
+    sv = sub.add_parser("service", help="keep Axon running in the background (systemd user service)")
     sv.add_argument("action", choices=["install", "remove"])
     sub.add_parser("doctor", help="check the sandbox, agent logins and each project's checks before real tasks").add_argument("project", nargs="?")
     args = ap.parse_args(argv)
@@ -356,7 +356,7 @@ def main(argv=None):
         except ValueError as e:
             sys.exit(str(e))
         print(f"project {f.stem} -> {root}\nadd your test commands under [checks] in {f} so results are verified\n"
-              f"then: navis doctor   and   navis add \"what to change\"")
+              f"then: axon doctor   and   axon add \"what to change\"")
         return
     if args.cmd == "passwd":
         return passwd()
@@ -380,11 +380,11 @@ def main(argv=None):
             sys.exit(f"duplicate of task {dup}; not queued")
         print(tid)
         if not runtime.runner_active():
-            print("note: nothing is running tasks yet; open `navis` (GUI) or run `navis service install` once", file=sys.stderr)
+            print("note: nothing is running tasks yet; open `axon` (GUI) or run `axon service install` once", file=sys.stderr)
         if args.follow:
             logs(store, tid, True)
         else:
-            print(f"queued for {args.agent} on {project}; watch it live: navis logs -f {tid}", file=sys.stderr)
+            print(f"queued for {args.agent} on {project}; watch it live: axon logs -f {tid}", file=sys.stderr)
     elif args.cmd == "ls":
         show_tasks(store)
     elif args.cmd == "show":

@@ -146,12 +146,12 @@ async function command(body) {
 }
 function updateAttention(previous, result) {
   const pending = result.tasks.filter(t => t.pending);
-  document.title = pending.length ? `(${pending.length} waiting) Navis — ${names[view]}` : `Navis — ${names[view]}`;
+  document.title = pending.length ? `(${pending.length} waiting) Axon — ${names[view]}` : `Axon — ${names[view]}`;
   if (!previous || !document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
   const known = new Set(previous.tasks.filter(t=>t.pending).map(t=>t.pending.id));
   const added = pending.filter(t=>!known.has(t.pending.id));
   if (added.length) {
-    try { const notification = new Notification('Navis needs your response', {body:`${added.length} task${added.length===1?'':'s'} waiting for input or approval.`,tag:'navis-attention'});
+    try { const notification = new Notification('Axon needs your response', {body:`${added.length} task${added.length===1?'':'s'} waiting for input or approval.`,tag:'axon-attention'});
       notification.onclick = () => {window.focus();notification.close();};
     } catch (_) { /* Mobile browsers may require a service worker, which this local UI does not install. */ }
   }
@@ -185,11 +185,11 @@ async function poll() {
   } catch (err) {
     connected = false; updateSystemChrome(); if ($('#command-dialog').open) renderCommands(); $('#local-connection').textContent = 'Disconnected';
     if (err.status===401 && err.login && !$('#login-dialog').open) {$('#login-form .form-error').textContent=''; $('#login-dialog').showModal(); $('#login-password').focus();}
-    $('#connection-alert').textContent = err.status===401 ? (err.login ? 'Signed out. Sign in with your Navis password.' : 'Not signed in. Run `navis` on the Navis machine to open it with its launch link.') : 'Connection unavailable. Controls are disabled. If Navis restarted, run `navis` again or reload this page.';
+    $('#connection-alert').textContent = err.status===401 ? (err.login ? 'Signed out. Sign in with your Axon password.' : 'Not signed in. Run `axon` on the Axon machine to open it with its launch link.') : 'Connection unavailable. Controls are disabled. If Axon restarted, run `axon` again or reload this page.';
     $('#connection-alert').hidden = false;
     ['#pause','#new-task','#add-project'].forEach(s=>$(s).disabled=true);
     $('#task-detail').querySelectorAll('button[data-action],button[data-continue],button[type="submit"]').forEach(b=>b.disabled=true);
-    if (!snapshot) $('#content').innerHTML = `<div class="panel">${empty('Connect your local runtime','Run python -m navis and open its full launch link. Browser-session access survives refresh until the runtime restarts.')}</div>`;
+    if (!snapshot) $('#content').innerHTML = `<div class="panel">${empty('Connect your local runtime','Run python -m axon and open its full launch link. Browser-session access survives refresh until the runtime restarts.')}</div>`;
   } finally { polling = false; }
 }
 function empty(title, description, icon='◈') {
@@ -325,7 +325,7 @@ function formatBytes(bytes) {
 function usagePanel() {
   const rows=snapshot.usage||[]; if (simulation()) return '';
   const k=n=>n>=10000?`${(n/1000).toFixed(1)}k`:String(n);
-  return `<section class="panel"><div class="panel-header"><h2>Usage, last 24 hours</h2><span class="muted">What each CLI exposed; blank means it exposed nothing</span></div>${rows.length?`<table class="usage-table"><thead><tr><th>Agent</th><th>Kind</th><th>Attempts</th><th>Time</th><th>Navis prompt</th><th>Input tokens</th><th>Output</th><th>Cost</th><th>Settings</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escapeHTML(r.agent)}</td><td>${escapeHTML(r.kind)}</td><td>${r.attempts} (${escapeHTML(Object.entries(r.outcomes).map(([o,n])=>`${o}:${n}`).join(' '))})</td><td>${Math.round(r.seconds)} s</td><td>${(r.prompt_bytes/1024).toFixed(1)} KB</td><td>${r.with_usage?`${k(r.input)} (${k(r.cached)} cached)`:'-'}</td><td>${r.with_usage?k(r.output):'-'}</td><td>${r.with_usage&&r.cost_usd?`$${r.cost_usd.toFixed(3)}`:'-'}</td><td>${escapeHTML(r.settings.join(', '))}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No finished attempts in the last 24 hours.</p>'}</section>`;
+  return `<section class="panel"><div class="panel-header"><h2>Usage, last 24 hours</h2><span class="muted">What each CLI exposed; blank means it exposed nothing</span></div>${rows.length?`<table class="usage-table"><thead><tr><th>Agent</th><th>Kind</th><th>Attempts</th><th>Time</th><th>Axon prompt</th><th>Input tokens</th><th>Output</th><th>Cost</th><th>Settings</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${escapeHTML(r.agent)}</td><td>${escapeHTML(r.kind)}</td><td>${r.attempts} (${escapeHTML(Object.entries(r.outcomes).map(([o,n])=>`${o}:${n}`).join(' '))})</td><td>${Math.round(r.seconds)} s</td><td>${(r.prompt_bytes/1024).toFixed(1)} KB</td><td>${r.with_usage?`${k(r.input)} (${k(r.cached)} cached)`:'-'}</td><td>${r.with_usage?k(r.output):'-'}</td><td>${r.with_usage&&r.cost_usd?`$${r.cost_usd.toFixed(3)}`:'-'}</td><td>${escapeHTML(r.settings.join(', '))}</td></tr>`).join('')}</tbody></table>`:'<p class="muted">No finished attempts in the last 24 hours.</p>'}</section>`;
 }
 function resourcePanel() {
   const slots = snapshot.resources?.slots || [];
@@ -419,7 +419,7 @@ function openTaskForm(source=null) {
   $('#task-scenario').closest('label').hidden = isReal;
   agentSelect.onchange = syncModelRow; syncModelRow();
   $('#create-description').textContent = isReal ? 'The agent works in a sandboxed clone of the project; your checkout is never touched.' : 'This task runs against a simulated agent. It cannot access your repository.';
-  $('#source-description').textContent = isReal ? 'The new task starts from the result commit of that task (its refs/navis/attempts/* ref).' : 'Source artifacts are copied as a simulation context reference; no Git branch is created.';
+  $('#source-description').textContent = isReal ? 'The new task starts from the result commit of that task (its refs/axon/attempts/* ref).' : 'Source artifacts are copied as a simulation context reference; no Git branch is created.';
   $('#task-project').innerHTML = snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${(source?.project_id||project)===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('');
   populateSources(source?.id||'');
   syncFlowRow();
@@ -439,7 +439,7 @@ function detailPanel(task) {
   }
   if (detailTab==='prompt') {
     const prompts = task.artifacts.filter(a=>a.kind==='prompt');
-    return prompts.length ? prompts.map(a=>artifactBlock(a,task,true)).join('') : `${empty('No provider prompt was sent','These are the task instructions saved in Navis. They are not a prompt delivered to a model.')}<pre>${escapeHTML(task.spec)}</pre>${task.instructions.map(i=>`<pre>Instruction v${i.version}\n${escapeHTML(i.text)}</pre>`).join('')}`;
+    return prompts.length ? prompts.map(a=>artifactBlock(a,task,true)).join('') : `${empty('No provider prompt was sent','These are the task instructions saved in Axon. They are not a prompt delivered to a model.')}<pre>${escapeHTML(task.spec)}</pre>${task.instructions.map(i=>`<pre>Instruction v${i.version}\n${escapeHTML(i.text)}</pre>`).join('')}`;
   }
   if (detailTab==='attempts') return task.attempts.map(a=>`<div class="detail-section"><small>${escapeHTML(a.id)} / ${date(a.started_at)} / ${escapeHTML(a.backend)}${a.model||a.effort?` / ${escapeHTML(a.model||'default')} · ${escapeHTML(a.effort||'default')}`:''}${a.usage?` / ${a.usage.input} in (${a.usage.cached} cached) · ${a.usage.output} out${a.usage.cost_usd?` · $${a.usage.cost_usd.toFixed(3)}`:''}`:''}</small>${badge(a.state||'RUNNING')}</div>`).join('') || empty('Waiting for dispatch','No attempt has started yet.');
   return task.artifacts.filter(a=>!['diff','agent_log','prompt'].includes(a.kind)).map(a=>artifactBlock(a,task,true)).join('') || empty('No results yet','Result and verification evidence will appear here after a simulated step.','◇');
@@ -472,8 +472,8 @@ function updateDetail(force=false) {
     controls.push(`<button class="button secondary" data-action="continue_with_claude" ${handoff.claude_continue===true?'':'disabled title="Claude is not logged in."'}>Continue with Claude</button>`);
   }
   if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="apply" title="Write these changes into your project folder as uncommitted edits. Nothing is written if your own edits touch the same lines.">Apply to my folder</button>');
-  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Navis integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
-  if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&task.head&&task.kind!=='review') controls.push('<button class="button primary" data-action="integrate" title="Merge this result into the Axon integration branch and run the checks on the merged commit. Your branch is not touched.">Add to integration branch</button>');
+  if (!simulation()&&task.state==='COMPLETED'&&typeof task.result_ref==='string'&&/^refs\/axon\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..')) controls.push('<button class="button secondary" data-copy-merge>Copy merge command</button>');
   const latestReview = (task.reviews||[])[0];
   if (!simulation()&&task.state==='COMPLETED'&&task.kind!=='review'&&latestReview&&latestReview.verdict==='changes'&&!latestReview.stale) controls.push('<button class="button primary" data-action="revise" title="Queue a bounded follow-up round that starts from this result and carries the reviewer findings.">Revise from review</button>');
   let request = '';
@@ -504,7 +504,7 @@ function confirmControl(action, task, info) {
   if (action==='promote'||action==='discard') {
     const discard = action==='discard';
     $('#confirm-title').textContent = discard ? 'Discard the integration branch?' : 'Fast-forward your branch?';
-    $('#confirm-description').textContent = discard ? 'Drops the Navis integration branch. Completed tasks stay completed and can be integrated again; your branch is not touched.' : `Moves ${info.branch} to the integration commit. Your working tree is checked first, no repository hooks run and nothing is pushed.`;
+    $('#confirm-description').textContent = discard ? 'Drops the Axon integration branch. Completed tasks stay completed and can be integrated again; your branch is not touched.' : `Moves ${info.branch} to the integration commit. Your working tree is checked first, no repository hooks run and nothing is pushed.`;
     $('#confirm-attempt').textContent = `${task.title} / commit ${task.attempt_id}`;
     $('#confirm-control').textContent = discard ? 'Confirm discard' : 'Confirm fast-forward';
     return new Promise(resolve=>{dialog.addEventListener('close',()=>{confirmPending=false;resolve(dialog.returnValue==='confirm');},{once:true});dialog.showModal();});
@@ -536,7 +536,7 @@ document.addEventListener('click',async e=>{
   if (e.target.closest('#more-events')) {eventLimit=Math.min(1000,eventLimit+100);render();return;}
   const tab = e.target.closest('[data-detail-tab]'); if (tab) {detailTab=tab.dataset.detailTab;updateDetail(true);return;}
   const copy = e.target.closest('[data-copy-artifact]'); if (copy) {const task=taskDetail?.task?.id===copy.dataset.copyTask?taskDetail.task:snapshot.tasks.find(t=>t.id===copy.dataset.copyTask);const artifact=task?.artifacts.find(a=>a.id===copy.dataset.copyArtifact);if(artifact?.content!==undefined)await copyText(artifact.content);return;}
-  if(e.target.closest('[data-copy-merge]')) {const task=currentTask();if(task&&typeof task.result_ref==='string'&&/^refs\/navis\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..'))await copyText(`git merge -- ${task.result_ref}`);return;}
+  if(e.target.closest('[data-copy-merge]')) {const task=currentTask();if(task&&typeof task.result_ref==='string'&&/^refs\/axon\/attempts\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(task.result_ref)&&!task.result_ref.includes('..'))await copyText(`git merge -- ${task.result_ref}`);return;}
   const opt = e.target.closest('[data-answer-option]'); if (opt) {
     const task=currentTask(), text=task?.pending?.options?.[Number(opt.dataset.answerOption)]; if (!task||!connected||text===undefined) return;
     opt.disabled=true; const result=await taskCommand('answer',{text,pending_id:task.pending.id});
@@ -674,12 +674,12 @@ document.addEventListener('keydown',e=>{
 // Chat: a real terminal (xterm.js, loaded on first use) on the agent's tmux session over a WebSocket.
 let chatSession = '', chatTerm = null, chatFit = null, chatSocket = null, chatLoading = null;
 // For phones and keys the browser keeps: each button types its terminal sequence.
-const chatKeys = [['\x1b','Esc'],['\t','Tab'],['\x1b[Z','⇧Tab'],['\x1b[A','↑'],['\x1b[B','↓'],['\x1b[D','←'],['\x1b[C','→'],['\r','Enter'],['\n','New line'],['\x03','Ctrl-C'],['\x04','Ctrl-D']];
+const chatKeys = [['\x1b','Esc'],['\t','Tab'],['\x1b[Z','⇧Tab'],['\x1b[A','↑'],['\x1b[B','↓'],['\x1b[D','←'],['\x1b[C','→'],['\x1b[1;2A','⇧↑'],['\x1b[1;2B','⇧↓'],['\x1b[1;2D','⇧←'],['\x1b[1;2C','⇧→'],['\r','Enter'],['\n','New line'],['\x03','Ctrl-C'],['\x04','Ctrl-D']];
 const chatApi = body => api('/api/command', body);
 function chatPanel() {
-  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="shell">Shell (bash in the sandbox)</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><div id="chat-term" class="chat-term" aria-label="Agent terminal. Typing here goes to the agent.">Start a chat, or pick a running one.</div><div class="chat-bar chat-keys">${chatKeys.map(([,l],i)=>`<button class="button secondary" type="button" data-chat-key="${i}">${l}</button>`).join('')}<button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><p class="muted chat-hint">Click the terminal and type, as in any terminal. Drag to select = copy; Ctrl+Shift+V = paste; the wheel scrolls back. Paste or drop an image to attach it. Each chat runs in its own sandboxed clone of the project; your checkout is never touched. From a terminal: <code>navis chat</code>.</p></section>`;
+  return `<section class="panel" id="chat-root"><form id="chat-start" class="chat-bar"><select name="project_id" aria-label="Project">${snapshot.projects.map(p=>`<option value="${escapeHTML(p.id)}" ${project===p.id?'selected':''}>${escapeHTML(p.name)}</option>`).join('')}</select><select name="agent" aria-label="Agent"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="shell">Shell (bash in the sandbox)</option></select><input name="label" maxlength="20" pattern="[A-Za-z0-9]{1,20}" placeholder="name (optional)" aria-label="Chat name, optional; a new name opens a separate chat"><button class="button primary" type="submit">Start or open chat</button></form><div id="chat-tabs" class="chat-tabs" role="tablist" aria-label="Running chats"></div><div id="chat-term" class="chat-term" aria-label="Agent terminal. Typing here goes to the agent.">Start a chat, or pick a running one.</div><div class="chat-bar chat-keys">${chatKeys.map(([,l],i)=>`<button class="button secondary" type="button" data-chat-key="${i}">${l}</button>`).join('')}<button class="button secondary" type="button" id="chat-attach">Image…</button><input id="chat-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden></div><p class="muted chat-hint">Click the terminal and type, as in any terminal. Drag to select = copy; Ctrl+Shift+V = paste; the wheel scrolls back. Paste or drop an image to attach it. Each chat runs in its own sandboxed clone of the project; your checkout is never touched. From a terminal: <code>axon chat</code>.</p></section>`;
 }
-const chatTitle = n => n.replace(/^navis-chat-/, '');
+const chatTitle = n => n.replace(/^axon-chat-/, '');
 function chatTabs(sessions) {
   const sig = sessions.join('|') + '#' + chatSession, tabs = $('#chat-tabs');
   if (!tabs || tabs.dataset.sig === sig) return;

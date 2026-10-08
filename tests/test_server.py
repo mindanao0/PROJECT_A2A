@@ -5,8 +5,8 @@ import threading
 import unittest
 from pathlib import Path
 
-from navis.core import Runtime
-from navis.server import ControlServer
+from axon.core import Runtime
+from axon.server import ControlServer
 
 
 class TransportTests(unittest.TestCase):
@@ -65,11 +65,11 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(status,200)
         self.assertIn("frame-ancestors 'none'",headers['Content-Security-Policy'])
         self.assertEqual(self.server.server_address[0],'127.0.0.1')
-        status, logo, headers = self.request(path='/navis-wordmark.png')
+        status, logo, headers = self.request(path='/axon-wordmark.svg')
         self.assertEqual(status, 200)
-        self.assertEqual(headers['Content-Type'], 'image/png')
-        self.assertTrue(logo.startswith(b'\x89PNG\r\n\x1a\n'))
-        status, icon, headers = self.request(path='/navis-icon.svg')
+        self.assertEqual(headers['Content-Type'], 'image/svg+xml')
+        self.assertIn(b'<svg', logo)
+        status, icon, headers = self.request(path='/axon-icon.svg')
         self.assertEqual(status, 200)
         self.assertEqual(headers['Content-Type'], 'image/svg+xml')
         self.assertIn(b'<svg', icon)
@@ -138,14 +138,14 @@ class LoginAndRemoteTests(unittest.TestCase):
         return result
 
     def test_password_hash_round_trip(self):
-        from navis.server import check_password, hash_password
+        from axon.server import check_password, hash_password
         stored = hash_password('correct horse', iterations=1000)
         self.assertTrue(check_password('correct horse', stored))
         self.assertFalse(check_password('wrong', stored))
         self.assertFalse(check_password('x', 'garbage'))
 
     def test_remote_needs_a_password_then_sign_in_works(self):
-        from navis.server import hash_password
+        from axon.server import hash_password
         remote = {'Host': 'box.tail1.ts.net', 'Origin': 'https://box.tail1.ts.net', 'Content-Type': 'application/json'}
         self.assertEqual(self.request('GET', '/', {'Host': 'box.tail1.ts.net'})[0], 403)  # no password: remote closed
         self.assertEqual(self.request('GET', '/', {'Host': 'other.example'})[0], 403)

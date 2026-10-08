@@ -1,4 +1,4 @@
-"""Integration branch (D-014): finished tasks are merged on refs/navis/integration/<project>, the
+"""Integration branch (D-014): finished tasks are merged on refs/axon/integration/<project>, the
 checks run on that exact commit, and the user fast-forwards their own branch.
 
 The user's checkout is only touched by promote(), which refuses a dirty tree. Merges are built with
@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from . import runtime, sandbox
 
-REF = "refs/navis/integration/{}"
+REF = "refs/axon/integration/{}"
 LOCKS = defaultdict(threading.Lock)  # ponytail: per process; across processes update-ref's compare-and-set decides
 
 
@@ -51,11 +51,11 @@ def run_checks(rt, t, proj, commit, tip, names=None):
     repo = runtime.data_dir() / "integrations" / f"{t['project']}-{commit[:10]}" / "repo"
     shutil.rmtree(repo.parent, ignore_errors=True)
     repo.parent.mkdir(parents=True)
-    sandbox.clone(proj["path"], repo, commit, f"navis/integration/{commit[:10]}")
+    sandbox.clone(proj["path"], repo, commit, f"axon/integration/{commit[:10]}")
     ro = [*proj["objects"], *proj["ro"]]
     try:
         for name, cmd in proj["prepare"].items():
-            rc, tail = rt._sandboxed(f"navis-{rt.tag}-{aid}-prepare{next(rt.counter)}", repo, ro, proj["prepare_rw"], cmd,
+            rc, tail = rt._sandboxed(f"axon-{rt.tag}-{aid}-prepare{next(rt.counter)}", repo, ro, proj["prepare_rw"], cmd,
                                      True, lim["check_memory"], lim["check_timeout"])
             if rc:
                 return [(f"prepare {name}", rc, tail)]
@@ -87,7 +87,7 @@ def _integrate(rt, tid):
         old = git(path, "rev-parse", "--verify", "-q", ref)[1]
         tip = old or head
         if not ancestor(path, head, tip):  # the user's branch moved on: bring it in first
-            tip, conflicts = merge(path, tip, head, "navis: sync with your branch")
+            tip, conflicts = merge(path, tip, head, "axon: sync with your branch")
             if conflicts:
                 raise IntegrationError(f"your branch and the integration branch conflict in: {', '.join(conflicts)}")
         if ancestor(path, t["head"], tip):
@@ -98,7 +98,7 @@ def _integrate(rt, tid):
         if ancestor(path, tip, t["head"]):
             new = t["head"]
         else:
-            new, conflicts = merge(path, tip, t["head"], f"navis: integrate task {tid}")
+            new, conflicts = merge(path, tip, t["head"], f"axon: integrate task {tid}")
             if conflicts:
                 raise IntegrationError(f"conflicts with the integration branch in: {', '.join(conflicts)}")
         results = run_checks(rt, t, proj, new, tip)

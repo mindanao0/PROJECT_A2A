@@ -3,15 +3,15 @@
 import json
 import time
 
-from navis import integrate, runtime
-from test_navis import DONE, NavisTest, edit, step
+from axon import integrate, runtime
+from test_axon import DONE, AxonTest, edit, step
 
 
 def verdict(status, summary):
     return step("mcp", tool="report_result", args={"status": status, "summary": summary})
 
 
-class Dependencies(NavisTest):
+class Dependencies(AxonTest):
     def add_after(self, spec, scope, after):
         tid, dup = runtime.add_task(self.store, "p", "fake", spec, scope, after=after)
         self.assertIsNone(dup)
@@ -56,7 +56,7 @@ class Dependencies(NavisTest):
         self.assertTrue(integrate.integrate(self.rt, b))
 
 
-class Revision(NavisTest):
+class Revision(AxonTest):
     def reviewed(self, status="failed", summary="src/x.py:1 wrong"):
         tid = self.add(edit("src/x.py") + DONE)
         self.run_all()
@@ -102,7 +102,7 @@ class Revision(NavisTest):
         self.assertFalse(runtime.review_approved(self.store, rid, self.task(rid)["head"]))
 
 
-class Delegation(NavisTest):
+class Delegation(AxonTest):
     def tool(self, t, **args):
         return self.rt._delegate(self.task(t), args)
 
@@ -145,7 +145,7 @@ class Delegation(NavisTest):
             th.join(30)
 
 
-class IntegrationReview(NavisTest):
+class IntegrationReview(AxonTest):
     def setUp(self):
         super().setUp()
         cfg = self.tmp / "cfg" / "projects" / "p.toml"
@@ -200,7 +200,7 @@ class IntegrationReview(NavisTest):
             runtime.request_integration_review(self.store, "p", "fake")
 
 
-class Rollback(NavisTest):
+class Rollback(AxonTest):
     def test_discard_drops_the_integration_branch_and_tasks_can_be_integrated_again(self):
         tid = self.add(edit("src/x.py") + DONE)
         self.run_all()
@@ -208,7 +208,7 @@ class Rollback(NavisTest):
         with self.assertRaisesRegex(integrate.IntegrationError, "changed"):
             integrate.discard(self.store, "p", expected="0" * 40)
         self.assertEqual(integrate.discard(self.store, "p", expected=tip), tip)
-        self.assertEqual(self.git("rev-parse", "--verify", "-q", "refs/navis/integration/p").strip(), "")
+        self.assertEqual(self.git("rev-parse", "--verify", "-q", "refs/axon/integration/p").strip(), "")
         self.assertEqual(self.task(tid)["status"], "COMPLETED")
         self.assertEqual(integrate.status(self.store, "p")["reason"], "nothing to promote")
         with self.assertRaisesRegex(integrate.IntegrationError, "no integration branch"):
@@ -216,7 +216,7 @@ class Rollback(NavisTest):
         self.assertEqual(integrate.integrate(self.rt, tid), tip)
 
 
-class TaskChecks(NavisTest):
+class TaskChecks(AxonTest):
     def setUp(self):
         super().setUp()
         self.project({"a": "test -f src/a/a.py", "b": "test -f src/b/b.py"})  # each half needs only its own file

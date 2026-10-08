@@ -62,8 +62,8 @@ Internal protocol จะ:
 
 ## OD-008 Who can merge — RESOLVED
 
-D-014: ผู้ใช้เป็นผู้สั่ง; Runtime รวมงานบน integration branch ของ Navis (`refs/navis/integration/<project>`) แล้วรัน check ซ้ำบน commit สุดท้าย ผู้ใช้ fast-forward เข้า branch ของตัวเอง ไม่มี auto-merge
-เหตุผล: เกณฑ์ Phase 2 (evidence ผูก exact commit, stale เมื่อ rebase) ทำได้ก็ต่อเมื่อ Runtime เป็นคนสร้าง integration commit; ปลายทางเป็น branch ของ Navis จึงไม่แตะ working tree ของผู้ใช้
+D-014: ผู้ใช้เป็นผู้สั่ง; Runtime รวมงานบน integration branch ของ Axon (`refs/axon/integration/<project>`) แล้วรัน check ซ้ำบน commit สุดท้าย ผู้ใช้ fast-forward เข้า branch ของตัวเอง ไม่มี auto-merge
+เหตุผล: เกณฑ์ Phase 2 (evidence ผูก exact commit, stale เมื่อ rebase) ทำได้ก็ต่อเมื่อ Runtime เป็นคนสร้าง integration commit; ปลายทางเป็น branch ของ Axon จึงไม่แตะ working tree ของผู้ใช้
 เลื่อนไปก่อน: verifier + policy auto-merge (ต้องมีหลักฐานว่า verifier ตรงกับการตัดสินของผู้ใช้พอก่อน) และ config `merge` per project (เพิ่มเมื่อมีโหมดที่สองจริง)
 
 ## OD-009 Context Broker implementation
@@ -77,11 +77,11 @@ D-014: ผู้ใช้เป็นผู้สั่ง; Runtime รวมง
 
 ไม่ควรเริ่มด้วยระบบ memory ซับซ้อนเกินจำเป็น
 
-**หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Navis ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI overhead ครองส่วนใหญ่) ข้อเสนอ: ยังไม่สร้าง Context Broker; เมื่อต้องการ ให้เริ่มจาก deterministic Git/file retrieval และวัดซ้ำด้วย `navis-cli usage` กับงานจริงที่ prompt ใหญ่ — ยังไม่ใช่คำตัดสินของผู้ใช้
+**หลักฐานจาก Phase 3 ([PHASE3.md](PHASE3.md)):** prompt ที่ Axon ส่งเป็นเพียง ~1–4% ของ input tokens ในงานเล็ก (CLI overhead ครองส่วนใหญ่) ข้อเสนอ: ยังไม่สร้าง Context Broker; เมื่อต้องการ ให้เริ่มจาก deterministic Git/file retrieval และวัดซ้ำด้วย `axon-cli usage` กับงานจริงที่ prompt ใหญ่ — ยังไม่ใช่คำตัดสินของผู้ใช้
 
 ## OD-010 Project configuration format — PROPOSED
 
-ข้อเสนอ: TOML นอก repo ที่ `~/.config/navis/projects/<project>.toml` (ตัวอย่างใน [Execution Design](EXECUTION_DESIGN.md) §9) เพื่อไม่เพิ่มไฟล์ใน repo ของ project (D-007)
+ข้อเสนอ: TOML นอก repo ที่ `~/.config/axon/projects/<project>.toml` (ตัวอย่างใน [Execution Design](EXECUTION_DESIGN.md) §9) เพื่อไม่เพิ่มไฟล์ใน repo ของ project (D-007)
 ยังต้องตัดสินว่ามีส่วนไหนควร commit ลง repo หรือไม่
 
 ## OD-011 Agent identity and roles
@@ -95,7 +95,7 @@ Roles เป็น:
 
 Cloud subscription CLI อาจไม่ expose token/cost แบบ API ต้องกำหนด fallback metric เช่น turns/time/context size
 
-วัดจริงแล้ว: Claude เปิดเผย tokens/cache/`total_cost_usd`/turns; Codex เปิดเผย tokens/cached ต่อ turn แต่ไม่มีราคา; Runtime เก็บ prompt bytes + เวลา + usage ที่มีต่อ attempt (`navis-cli usage`) ฟิลด์ที่ไม่เปิดเผยเป็น `None`
+วัดจริงแล้ว: Claude เปิดเผย tokens/cache/`total_cost_usd`/turns; Codex เปิดเผย tokens/cached ต่อ turn แต่ไม่มีราคา; Runtime เก็บ prompt bytes + เวลา + usage ที่มีต่อ attempt (`axon-cli usage`) ฟิลด์ที่ไม่เปิดเผยเป็น `None`
 
 ## OD-013 Prompt-injection boundary
 
@@ -177,4 +177,4 @@ D-004: เริ่มจากสรุป context และวิเครา�
 
 ## OD-024 Project name — RESOLVED
 
-D-011: Navis — ชื่อเดิม "A2A" ชนกับ Agent2Agent (A2A) protocol ซึ่ง OD-005 อาจทำ bridge ไปหาในอนาคต
+D-011: Axon — ชื่อแรก "A2A" ชนกับ Agent2Agent (A2A) protocol ซึ่ง OD-005 อาจทำ bridge ไปหาในอนาคต; ชื่อที่สอง Navis ฟังคล้าย Jarvis จึงเปลี่ยนเป็น Axon (2026-10-07)

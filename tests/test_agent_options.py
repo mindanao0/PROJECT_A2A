@@ -8,9 +8,9 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from navis import agent_options as ao
-from navis import cli, runtime, usage
-from test_navis import DONE, NavisTest, edit
+from axon import agent_options as ao
+from axon import cli, runtime, usage
+from test_axon import DONE, AxonTest, edit
 
 
 class Pure(unittest.TestCase):
@@ -89,7 +89,7 @@ class Adapters(unittest.TestCase):
         self.assertEqual(argv[-1], "p")  # the prompt stays last
 
 
-class Runtime(NavisTest):
+class Runtime(AxonTest):
     def set_config(self, **agents):
         f = self.tmp / "cfg" / "config.toml"
         f.write_text(f.read_text().split("[agents]")[0] + "[agents]\n" + "".join(f'{k} = "{v}"\n' for k, v in agents.items()))
