@@ -55,25 +55,13 @@ class Limits(unittest.TestCase):
         self.assertAlmostEqual(got["as_of"], 1791348796.974, places=2)
         self.assertIsNone(usage.codex_limits(home / "nothing"))
 
-    def test_claude_asks_only_with_a_valid_token_and_otherwise_shows_the_last_answer(self):
-        import io, tempfile
-        from pathlib import Path
-        from unittest import mock
-        home, cache = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()) / "c.json"
-        creds = lambda expires: (home / ".credentials.json").write_text(json.dumps(
-            {"claudeAiOauth": {"accessToken": "tok", "expiresAt": expires * 1000}}))
-        answer = {"five_hour": {"utilization": 4.0, "resets_at": "2026-10-07T14:19:59+00:00"},
-                  "seven_day": {"utilization": 88.0, "resets_at": "2026-10-08T00:59:59+00:00"}, "seven_day_opus": None}
-        creds(time.time() + 3600)
-        with mock.patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(answer).encode())) as call:
-            got = usage.claude_limits(home, cache)
-        req = call.call_args[0][0]
-        self.assertEqual((req.full_url, req.get_header("Authorization")), (usage.CLAUDE_USAGE, "Bearer tok"))
-        self.assertEqual([(w["window"], w["used"]) for w in got["windows"]], [("5h", 4.0), ("week", 88.0)])
-        creds(time.time() - 60)  # expired: no request, the saved answer
-        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("must not call")):
-            self.assertEqual(usage.claude_limits(home, cache), got)
-        self.assertIsNone(usage.claude_limits(home / "none", cache.with_name("none.json")))
+    def test_claude_limits_come_from_its_own_rate_limit_event(self):
+        ev = {"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
+            "five_hour": {"utilization": 0.05, "resetsAt": 1791462600}, "seven_day": {"utilization": 0.02, "resetsAt": 1792026000}}}}
+        got = usage.claude_limits('{"type":"system"}\n' + json.dumps(ev) + "\nnot json", 7.0)
+        self.assertEqual(got, {"windows": [{"window": "5h", "used": 5.0, "resets_at": 1791462600},
+                                           {"window": "week", "used": 2.0, "resets_at": 1792026000}], "as_of": 7.0})
+        self.assertIsNone(usage.claude_limits('{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}', 7.0))
 
 
 class Accounting(AxonTest):

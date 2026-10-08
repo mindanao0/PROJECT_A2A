@@ -853,6 +853,10 @@ class Runtime:
         used = usage.parse(t["agent"], (adir / "agent.log").read_bytes()[-usage.TAIL:].decode(errors="replace"))
         s.x("update attempts set prompt_bytes = ?, usage = ? where id = ?", len(prompt.encode()),
             json.dumps(used) if used else None, aid)
+        if t["agent"] == "claude":  # shown in the Agent fleet; the last answer stays until the next run
+            lim = usage.claude_limits((adir / "agent.log").read_bytes()[-usage.TAIL:].decode(errors="replace"), time.time())
+            if lim:
+                (data_dir() / "claude-limits.json").write_text(json.dumps(lim))
         head = self._collect(t, aid, adir, ro, base, proj)
         self._finish(t, aid, adir, "leak" if head is None else outcome, state, head or base, proj, ro)
 

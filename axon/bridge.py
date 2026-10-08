@@ -92,8 +92,11 @@ class Bridge:
 
     def refresh_limits(self):
         home = runtime.data_dir() / "agents"
-        self.limits = {"claude": usage.claude_limits(home / "claude", runtime.data_dir() / "claude-limits.json"),
-                       "codex": usage.codex_limits(home / "codex")}
+        try:  # written by the Runner from claude's own output after each attempt
+            claude = json.loads((runtime.data_dir() / "claude-limits.json").read_text())
+        except (OSError, ValueError):
+            claude = None
+        self.limits = {"claude": claude, "codex": usage.codex_limits(home / "codex")}
 
     def close(self):
         if self.runner:
