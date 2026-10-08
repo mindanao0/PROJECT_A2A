@@ -9,11 +9,17 @@ Boundary probes: `probes/boundary.sh` (ผ่านแล้ว 2026-10-06)
 Core language: Python (D-012)
 Exit: sandbox, cgroup และ git isolation ใช้งานได้บนเครื่องจริง
 
+## สถานะรวม (2026-10-08)
+
+- **merge แล้ว:** Phase 0–3 (Phase 1b ทดสอบเฉพาะบางส่วน ดูด้านล่าง), Phase 4 ที่สร้างแล้วแต่ปิดไว้, Phase 5 ที่วัดแล้ว, การเปลี่ยนชื่อเป็น Axon (PR #26)
+- **ค้างตาม roadmap:** Phase 1b ยังไม่ทดสอบ quota จริง, ข้อความ rate limit จริง และ credential leak กับ CLI จริง; OD ที่ยังเปิดอยู่ (ดู [Open Decisions](OPEN_DECISIONS.md)) รวมถึงการเลือก UI/transport และการวัดบน VELA (OD-007); Context Broker ยังไม่สร้างจนกว่าจะมีงานจริงที่ prompt ใหญ่ (OD-009)
+- **Local coding ปิดเป็นค่าเริ่มต้น** และยังไม่มีโมเดลที่ผ่านงานทดสอบ
+
 ## GUI foundation ที่มีแล้ว (ยังไม่ปิด Phase 1)
 
 `python3 -m axon` เปิด local control GUI พร้อม in-process simulated agent, SQLite snapshot/events, task board, user requests และ lifecycle controls ดู [GUI Guide](GUI.md) สำหรับผลทดสอบและข้อจำกัด
 
-ยังไม่มี sandboxed fake-agent CLI, production Runner, MCP หรือ provider adapter; ไม่ถือว่า execution/boundary/process-tree acceptance scenarios ผ่านจากผลทดสอบ UI simulation
+หลังจากนั้น fake-agent, Runner, adapter ของ Codex/Claude/local, MCP และ integration/review มีแล้ว (ดู Phase 1–2); หลักฐานของ execution/boundary/process-tree มาจากการทดสอบ runtime จริงใน Phase 1 และ 1b ไม่ใช่จากผล UI simulation
 
 ## Phase 1 — Single-agent MVP foundations
 
@@ -49,7 +55,7 @@ Exit: single-agent, boundary, controls, recovery และ local UI acceptance c
 | Quota limit | `test_quota_waits_for_cooldown_without_using_a_retry` | ผ่าน |
 | Scope overlap / duplicate | `test_overlapping_scopes_never_run_together`, `test_duplicate_task_is_not_queued` | ผ่าน |
 | Local/remote boundary | `tests/test_server.py` (401/403, Origin, loopback only) | ผ่าน |
-| UI disconnect | `tests/gui-smoke.cjs` | ผ่านเฉพาะ simulation |
+| UI disconnect | `tests/gui-smoke.cjs` (simulation, 2026-10-08 ผ่าน); `tests/gui-real-smoke.cjs` (runtime จริงกับ fake-agent, 2026-10-08 ผ่าน: create → integrate → discard → integrate → fast-forward) | ผ่าน (ทั้งสองโหมด) |
 | Stale context | `test_instruction_during_an_attempt_discards_its_result` (instruction เปลี่ยนระหว่างรัน → ทิ้งผล, รันใหม่โดยไม่เสีย retry), `test_task_stays_pinned_to_its_base_when_the_project_moves` (task ผูก base commit); stale integration commit เป็นงาน Phase 2 เพราะ Phase 1 ไม่ merge | ผ่าน (ขอบเขต Phase 1) |
 | Unknown outcome | `test_crash_after_fetch_before_recording_is_rerun_once` (ผล fetch แล้วแต่ไม่ได้บันทึก → requeue, รันซ้ำครั้งเดียว, ไม่แตะ checkout ของ project); reconciliation เต็มรูปแบบเลื่อนไป Phase 2 ที่มี effect ภายนอก | ผ่าน (ตามเกณฑ์ที่แก้) |
 | Local helper | `tests/test_helper.py` (4 เคส: อ้าง source ref และจับ ref ที่แต่งขึ้น, ไม่ส่ง tools/credentials, ปฏิเสธ URL ที่ไม่ใช่ loopback, ไม่ผ่าน proxy); ลองกับ Ollama `qwen2.5-coder:7b` จริงผ่าน `axon-cli summarize <id>` ใช้เวลา ~10 วินาที | ผ่าน (CLI เท่านั้น ยังไม่มีปุ่มใน GUI) |
@@ -106,7 +112,7 @@ Review (`axon-cli review <task> -a codex|claude|fake`, ปุ่ม **Review wit
 | Conflict handling | `test_conflicting_result_is_rejected_and_the_ref_stays`, `test_checks_run_on_the_merged_commit_and_a_failure_does_not_advance_the_ref` | ผ่าน |
 | Rollback ของ workspace ที่ Axon จัดการ | `test_discard_drops_the_integration_branch_and_tasks_can_be_integrated_again`; GUI: `tests/gui-real-smoke.cjs` | ผ่าน |
 
-ข้อจำกัดที่ยังเหลือ: คุณภาพของ review วัดจากบั๊กที่ฝังเองกรณีเดียว (ไม่ใช่ชุดเปรียบเทียบ); Debate/consensus หลายรอบแบบ proposal/critique ระหว่าง agent โดยไม่ผ่านผู้ใช้เป็นงาน Phase 5 (OD-017); dependency มีต้นทางเดียว (ไม่มี fan-in หลาย dependency); GUI ยังไม่มีช่องเลือก dependency ตอนสร้างงาน (ใช้ CLI หรือ bridge); การประเมิน quota รวมของวงจร implement→review→revise ยังไม่ได้วัด (ใช้ token จริงทุกรอบ)
+ข้อจำกัดที่ยังเหลือ: คุณภาพของ review วัดจากบั๊กที่ฝังเองกรณีเดียว (ไม่ใช่ชุดเปรียบเทียบ); Debate/consensus หลายรอบแบบ proposal/critique ระหว่าง agent โดยไม่ผ่านผู้ใช้เป็นงาน Phase 5 (OD-017); dependency มีต้นทางเดียว (ไม่มี fan-in หลาย dependency); ฟอร์มสร้างงานใน GUI มีช่อง **Start after task** แล้ว (ดู [GUI Guide](GUI.md)) แต่ยังเลือกได้ต้นทางเดียว; การประเมิน quota รวมของวงจร implement→review→revise ยังไม่ได้วัด (ใช้ token จริงทุกรอบ)
 
 ## Phase 3 — Context and resource optimization
 
@@ -144,6 +150,8 @@ Agent Runner ของ local model สร้างและทดสอบแล
 ### Phase 5 status — Debate (วัดก่อนสร้าง)
 
 ยังไม่สร้างระบบ Team/Debate: ทดลองวัดด้วยงานที่ต่อกันจากของเดิม (`probes/debate.py`) ผลสรุปอยู่ใน [Phase 5](PHASE5.md) — เห็นความต่างเฉพาะ spec ที่มีกฎตรวจ/ข้อผิดพลาดยาว (semver) ในราคา ~3× เวลาและ token และ 2 จาก 6 รอบค้างรออนุมัติ จึงเลื่อนไว้ A2A bridge, desktop wrapper และ adversarial review ไม่ทำ (ยังไม่มี use case)
+
+ที่ทำแล้ว: ปิดช่องว่าง GUI (dependency, check ต่องาน, reviewer, usage); agent `auto` พร้อม reroute เมื่อชน quota (ยังไม่เคยชน quota จริง ทดสอบด้วย agent จำลอง); เปลี่ยนชื่อโปรเจกต์เป็น Axon (D-011)
 
 ## Phase 6 — Remote control
 
