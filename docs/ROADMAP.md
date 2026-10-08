@@ -12,7 +12,7 @@ Exit: sandbox, cgroup และ git isolation ใช้งานได้บน�
 ## สถานะรวม (2026-10-08)
 
 - **merge แล้ว:** Phase 0–3 (Phase 1b ทดสอบเฉพาะบางส่วน ดูด้านล่าง), Phase 4 ที่สร้างแล้วแต่ปิดไว้, Phase 5 ที่วัดแล้ว, การเปลี่ยนชื่อเป็น Axon (PR #26)
-- **ค้างตาม roadmap:** Phase 1b ยังไม่ทดสอบ quota จริง, ข้อความ rate limit จริง และ credential leak กับ CLI จริง; OD ที่ยังเปิดอยู่ (ดู [Open Decisions](OPEN_DECISIONS.md)) รวมถึงการเลือก UI/transport และการวัดบน VELA (OD-007); Context Broker ยังไม่สร้างจนกว่าจะมีงานจริงที่ prompt ใหญ่ (OD-009)
+- **ค้างตาม roadmap:** Phase 1b ยังไม่ทดสอบ quota จริง, ข้อความ rate limit จริง และ credential leak กับ CLI จริง; OD ที่ยังเปิดอยู่คือนโยบายของ provider (OD-019) และงาน enforcement ที่ค้างใน OD-013/015/023 (ดู [Open Decisions](OPEN_DECISIONS.md)); การวัด overhead บน VELA (OD-007); Context Broker ยังไม่สร้างจนกว่าจะมีงานจริงที่ prompt ใหญ่ (OD-009)
 - **Local coding ปิดเป็นค่าเริ่มต้น** และยังไม่มีโมเดลที่ผ่านงานทดสอบ
 
 ## GUI foundation ที่มีแล้ว (ยังไม่ปิด Phase 1)
