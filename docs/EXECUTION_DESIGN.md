@@ -115,7 +115,7 @@ Verified: ผู้ใช้อยู่ในกลุ่ม `docker`; sandbox 
 
 ```toml
 path = "~/code/PROJECT_VELA"
-protected = ["tests/contract/", "Implementation_Governance/", "pyproject.toml", "uv.lock"]
+protected = ["tests/contract/", "Implementation_Governance/", "pyproject.toml", "uv.lock"]   # + .claude/ .codex/ .mcp.json เสมอ (OD-013)
 require_review = true   # integrate ต้องมี review ที่ approve commit ผลของ task นั้นพอดี (ไม่ใส่ = ไม่บังคับ)
 
 [prepare]   # มีเน็ต; auto-allow เมื่อ pyproject.toml/uv.lock ไม่เปลี่ยนจาก base

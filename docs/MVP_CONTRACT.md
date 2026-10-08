@@ -8,7 +8,7 @@
 - Cloud coding agent อ่าน/แก้โค้ด/ทดสอบใน assigned workspace ตามสิทธิ์ที่บังคับใช้จริง
 - Local helper รับข้อความ context/log ที่ผ่าน policy แล้ว และคืน summary/analysis
 - ไม่มี remote control, web-chat takeover, local coding หรือ autonomous push/merge/deploy ใน MVP
-- Core language, UI technology, transport, storage และ sandbox implementation ยังเปิดอยู่
+- Core language, UI technology, transport, storage และ sandbox implementation เลือกแล้วใน D-012 และ D-015–D-017, D-022
 
 ## 2. Adapter feasibility matrix
 

@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from axon import runtime, sandbox
 
@@ -341,6 +342,45 @@ class Safety(AxonTest):
         self.assertEqual(self.task(tid)["status"], "COMPLETED", self.task(tid)["note"])
         self.assertFalse(marker.exists())
         self.assertEqual(sorted(p.name for p in (self.proj / ".git/hooks").glob("post-commit")), [])
+
+    def test_agent_settings_in_a_result_need_review(self):
+        tid = self.add(edit(".claude/settings.json", '{"hooks": {}}\n') + DONE, scope=["."])
+        self.run_all()
+        self.assertEqual(self.task(tid)["status"], "REVIEW")
+        self.assertIn("protected: .claude/settings.json", self.task(tid)["note"])
+
+    def test_a_retry_does_not_start_on_agent_settings_an_attempt_planted(self):
+        self.project({"unit": "false"})
+        tid = self.add(edit(".codex/config.toml", 'notify = ["true"]\n', attempt=1) + DONE, scope=["."])
+        self.run_all()
+        t = self.task(tid)
+        self.assertEqual(t["status"], "WAITING_APPROVAL")
+        self.assertIn("agent settings changed (.codex/config.toml)", t["note"])
+        self.assertEqual(self.outcomes(tid), ["done", "needs-approval"])
+        self.assertTrue(runtime.approve(self.store, tid))
+        self.run_all()
+        self.assertEqual(self.outcomes(tid), ["done", "needs-approval", "done"])
+
+
+class AgentConfig(unittest.TestCase):
+    def test_agent_settings_are_always_protected_and_their_changes_found(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"AXON_CONFIG": f"{d}/cfg"}):
+            proj = Path(d, "proj")
+            git = ["git", "-C", str(proj), "-c", "user.name=t", "-c", "user.email=t@t"]
+            (proj / "src").mkdir(parents=True)
+            (proj / "src/x.py").write_text("x = 1\n")
+            subprocess.run(["git", "init", "-q", str(proj)], check=True)
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-qm", "a"], check=True)
+            for f in (".claude/settings.json", ".mcp.json", "src/.claude/notes.md", "src/x.py"):
+                (proj / f).parent.mkdir(parents=True, exist_ok=True)
+                (proj / f).write_text("changed\n")
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-qm", "b"], check=True)
+            Path(d, "cfg/projects").mkdir(parents=True)
+            Path(d, "cfg/projects/p.toml").write_text(f'path = "{proj}"\nprotected = ["tests/", ".claude"]\n')
+            self.assertEqual(runtime.load_project("p")["protected"], [".claude", ".codex", ".mcp.json", "tests"])
+            self.assertEqual(runtime.agent_config_changes(str(proj), "HEAD~1", "HEAD"), [".claude/settings.json", ".mcp.json"])
 
 
 class Adapters(unittest.TestCase):

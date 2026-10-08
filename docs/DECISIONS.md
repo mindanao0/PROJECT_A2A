@@ -21,12 +21,32 @@
 | D-013 | สร้างและทดสอบกับ `fake-agent` ให้เสร็จก่อนใช้ CLI จริง | probes ที่ใช้ quota (Execution Design §10) เลื่อนไปหลัง Runtime ผ่าน acceptance scenarios กับ fake แล้ว |
 | D-014 | Merge: ผู้ใช้สั่ง, Runtime รวมงานบน integration branch ของ Axon | Runtime rebase/merge ผลของ task บน `refs/axon/integration/<project>` แล้วรัน check ซ้ำบน commit สุดท้าย; ผู้ใช้ fast-forward เข้า branch ของตัวเองเอง (CLI ก่อน, GUI ภายหลัง) Runtime ไม่แตะ branch หรือ working tree ของผู้ใช้ และไม่มี auto-merge ใน MVP (OD-008) |
 
+### ยืนยันเพิ่ม 2026-10-08 (บันทึกตามที่ implement แล้ว)
+
+| ID | คำตัดสินที่ยืนยันแล้ว | ผลต่อ MVP |
+| --- | --- | --- |
+| D-015 | UI เป็น browser UI ที่ Axon serve เอง | `axon/web` ไม่มี framework/build step; ไม่ทำ desktop wrapper จนกว่าจะมีความต้องการที่ browser ทำไม่ได้ (OD-002) |
+| D-016 | Transport: HTTP บน loopback + polling, WebSocket เฉพาะ terminal ของ Chat, Unix socket ต่อ attempt สำหรับ agent | เปลี่ยนเป็น SSE เมื่อ polling ช้าหรือเปลืองจนวัดได้ (OD-003) |
+| D-017 | Storage: SQLite (WAL) เป็น state หลัก ไฟล์ของ attempt อยู่ข้าง ๆ | ไม่ใช้ embedded DB อื่น (OD-004) |
+| D-018 | Adapter ใช้โหมด noninteractive แบบมีโครงสร้างของ CLI ทางการ + MCP tools ของ Axon | ไม่ใช้ PTY/app-server; Runner ไม่พึ่ง resume ของ provider (OD-006) |
+| D-019 | Clone ต่อ attempt (`git clone --shared`) ไม่ใช้ worktree | ผลกลับเป็น bundle ที่ `refs/axon/attempts/<id>` (OD-007) |
+| D-020 | Project config เป็น TOML นอก repo ทั้งหมด | ไม่มีส่วนไหน commit ลง repo ของ project (OD-010) |
+| D-021 | Usage accounting ต่อ attempt: prompt bytes, เวลา, model/effort และ usage เท่าที่ CLI เปิดเผย | ค่าที่ไม่เปิดเผยเป็น `None`; fair scheduling ใช้ wall time (OD-012) |
+| D-022 | Sandbox: bwrap + systemd user scope ต่อ attempt | คำสั่งของ agent และ checks ไม่มีเน็ต; Chat เป็นข้อยกเว้นที่ผู้ใช้คุมเอง (OD-021) |
+| D-023 | Trust precedence: Runtime policy > ผู้ใช้ > repo instruction > agent message > web/tool content และ artifact | label ใน prompt ไม่ใช่ enforcement; settings ของ agent CLI ใน repo เป็น protected เสมอ; เปิดเว็บให้ agent ต่อโดยยอมรับความเสี่ยง; งานที่ค้างอยู่ใน OD-013 |
+| D-024 | Adapter/agent รันเป็น child process ใน sandbox ของ attempt | ไม่มีระบบ plugin จากภายนอก (OD-014) |
+| D-025 | Lifecycle/controls ตามที่ implement ใน Runtime | ช่องว่างกับ MVP Contract ที่รู้แล้วอยู่ใน OD-023 |
+| D-026 | Local backend คือ Ollama บน loopback, โมเดลเริ่มต้น `qwen2.5-coder:7b`; local coding คงปิด | ประเมินใหม่เมื่อมีโมเดล/ฮาร์ดแวร์ที่ดีกว่า (OD-022, Phase 4) |
+| D-027 | Protocol ภายในเป็น native schema; ทำ A2A bridge เมื่อมี external agent เท่านั้น | ต้องเพิ่ม schema_version/correlation id ใน event ก่อนทำ bridge (OD-005) |
+| D-028 | ยังไม่สร้าง Context Broker | กลับมาดูเมื่อ prompt ของ Axon เป็นสัดส่วนสำคัญของ token ในงานจริง; เริ่มจาก deterministic Git/file retrieval (OD-009) |
+| D-029 | Roles แบบ hybrid: ค่าเริ่มต้นใน config, เลือก agent/model/effort ต่องานได้, บทบาทมาจากชนิดงาน | ไม่สร้าง capability matching อัตโนมัติจนกว่าจะมีข้อมูล (OD-011) |
+| D-030 | Remote ผ่าน Tailscale (`axon remote`) พร้อมรหัสผ่านเท่านั้น; Axon bind แค่ loopback | ห้ามเปิดออก internet สาธารณะ; token ต่อเครื่องและระดับสิทธิ์เป็นงานค้าง (OD-015) |
+| D-031 | Session ต่อ attempt สำหรับงาน; ความต่อเนื่องมาจาก git snapshot และโน้ตใน prompt | งานที่ต้องคุยต่อเนื่องใช้ Chat (OD-016) |
+| D-032 | ไม่สร้าง Team/Debate; ใช้ implement → review → revise ที่จำกัดรอบ | ถ้าสร้างในอนาคต ใช้ verifier + ผู้ใช้ตัดสิน ไม่ใช้ majority vote อย่างเดียว (OD-017) |
+
 ## ข้อเสนอที่ยังไม่ได้ล็อก
 
-- เริ่ม Local LLM backend เพียงหนึ่งตัว และเลือกหลัง Phase 0
-- ทดลอง Codex app-server / Claude Code structured CLI interfaces ก่อน PTY
-- UI เล็กในช่วง runtime skeleton; Web UI เป็นข้อเสนอ ไม่ใช่คำตัดสินเรื่อง framework
 - ผู้ใช้เป็นผู้สั่ง push/merge/deploy ช่วงแรก; local commit ใน clone ของ attempt ยืนยันแล้วใน D-010 ส่วนการรวมงานยืนยันแล้วใน D-014
 - เป้าหมายเดิมคือไม่บังคับ cloud API-key workflow; การเรียก local endpoint และ structured CLI protocol ยังใช้ได้ตาม draft เดิม หากต้องการห้าม interface เหล่านี้ด้วยต้องตัดสินแยก
 
-คำตัดสินข้างต้นไม่ได้ยืนยัน UI framework, transport, database, sandbox technology หรือความสามารถจริงของ backend ใด
+ความสามารถจริงของแต่ละ backend ดูจากผล probe ใน [MVP Contract](MVP_CONTRACT.md) §2 ไม่ใช่จากคำตัดสินในเอกสารนี้
