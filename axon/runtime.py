@@ -25,7 +25,12 @@ from .store import Store
 
 # ponytail: generic pattern; replace with each CLI's real rate-limit text after the Phase 1b probes.
 REVIEW_DIFF = 60_000
-QUOTA_RE = re.compile(r"rate.?limit|usage.?limit|quota", re.I)
+QUOTA_RE = re.compile(r"rate.?limit|usage.?limit|limit\s*reached|quota", re.I)
+# A TUI does not exit at its limit, it waits: narrower than QUOTA_RE because it is read while the agent still works.
+# It positions words with cursor codes instead of spaces, so ANSI is replaced by a space before matching.
+# ponytail: Claude's real limit text was never seen (Phase 1b); widen when it is.
+TUI_QUOTA_RE = re.compile(r"limit\s+reached|hit\s+your [\w -]{0,20}limit", re.I)
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 STOPPABLE = ("QUEUED", "WAITING_INPUT", "WAITING_APPROVAL", "WAITING_QUOTA", "REVIEW")
 # What an agent CLI loads as its own settings from the repository: hooks and helpers there run commands with the
 # CLI's network, outside run_check. Always protected, and never loaded unseen by a later attempt (OD-013).
@@ -36,7 +41,9 @@ DEFAULTS = {
                "check_timeout": 900, "max_attempts": 2, "quota_backoff": [900, 1800, 3600],
                "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
     # model/effort "" = the CLI's default; web: agents may search and read web pages (their commands and checks stay offline)
-    "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": "", "web": True},
+    # *_mode: "interactive" = the CLI's real terminal session (open it in the Chat tab; no `claude -p`), "headless" = one prompt, then exit
+    "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": "", "web": True,
+               "claude_mode": "interactive", "codex_mode": "headless"},
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
     "server": {"port": 8765, "hosts": []},  # hosts: names a proxy on this machine serves the GUI under (axon remote)
     # Local coding is a role the user must switch on (D-004): off until the Agent Runner's tests are trusted.
@@ -200,7 +207,7 @@ def _which(name):
     return Path(exe).resolve()
 
 
-def fake_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):
+def fake_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=(), interactive=False):
     return ([sandbox.PY, "-m", "axon.fake_agent", prompt],
             {"AXON_MCP": json.dumps(mcp), "AXON_AGENT_HOME": str(home)}, [])
 
@@ -209,7 +216,7 @@ def add_dirs(dirs):
     return [a for d in dirs for a in ("--add-dir", d)]
 
 
-def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):
+def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=(), interactive=False):
     # Unverified until Phase 1b (D-013).
     exe = _which("codex")
     # --search (live web search) is a top-level flag: it goes before `exec`.
@@ -222,13 +229,15 @@ def codex_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=Fa
     return argv, {"CODEX_HOME": str(home)}, [str(exe.parent.parent)]
 
 
-def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):
+def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=(), interactive=False):
     # Unverified until Phase 1b (D-013). No Bash: commands only through run_check.
     exe = _which("claude")
     cfg = io / "mcp.json"
     tools = ("Read,Glob,Grep" if readonly else "Read,Edit,Write,Glob,Grep") + (",WebFetch,WebSearch" if web else "")
     cfg.write_text(json.dumps({"mcpServers": {"axon": {"command": mcp[0], "args": mcp[1:]}}}))
-    argv = [str(exe), "-p", prompt, "--output-format", "stream-json", "--verbose",
+    # Interactive: the prompt only opens the session, which stays for the user; the agent ends it with report_result.
+    head = [prompt] if interactive else ["-p", prompt, "--output-format", "stream-json", "--verbose"]
+    argv = [str(exe), *head,
             "--mcp-config", str(cfg), "--strict-mcp-config", "--permission-mode", "acceptEdits",
             "--tools", tools,  # default-deny: the built-in set also has Cron/RemoteTrigger/...
             "--allowedTools", f"{tools},mcp__axon",
@@ -237,7 +246,21 @@ def claude_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=F
     return argv, {"CLAUDE_CONFIG_DIR": str(home)}, [str(exe.parent)]
 
 
-def local_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=()):  # model: [local]; files: the clone only
+def trust_folder(home, path):
+    """Claude asks once per folder whether to trust it; an attempt's clone is new each time, so Axon answers in
+    Claude's own config (the clone is Axon's). Entries of attempt clones that no longer exist are dropped."""
+    f = Path(home, ".claude.json")
+    try:
+        d = json.loads(f.read_text())
+    except (OSError, ValueError):
+        d = {}
+    mine = str(data_dir() / "attempts")
+    d["projects"] = {k: v for k, v in d.get("projects", {}).items() if not k.startswith(mine) or Path(k).exists()}
+    d["projects"].setdefault(str(path), {})["hasTrustDialogAccepted"] = True
+    f.write_text(json.dumps(d))
+
+
+def local_cmd(prompt, mcp, home, io, readonly=False, model="", effort="", web=False, dirs=(), interactive=False):  # model: [local]; files: the clone only
     cfg = load_config()["local"]
     env = {"AXON_MCP": json.dumps(mcp), "AXON_LOCAL_URL": cfg["url"], "AXON_LOCAL_MODEL": cfg["model"],
            "AXON_LOCAL_MAX_TURNS": str(cfg["max_turns"]), "AXON_LOCAL_MAX_TOKENS": str(cfg["max_tokens"]),
@@ -811,29 +834,42 @@ class Runtime:
         s.x("update attempts set model = ?, effort = ? where id = ?", model or None, effort or None, aid)
         s.log(tid, aid, "settings", model=model or "default", effort=effort or "default")
         dirs = [] if t["kind"] == "review" else proj["rw"]  # a reviewer writes nothing
+        interactive = self.cfg["agents"].get(f"{t['agent']}_mode") == "interactive"
+        if interactive and t["agent"] not in ("claude", "fake"):
+            raise ValueError(f"{t['agent']} has no interactive mode; set {t['agent']}_mode = \"headless\" under [agents]")
         argv, env, extra_ro = ADAPTERS[t["agent"]](prompt, mcp, home, io, readonly=t["kind"] == "review", model=model,
-                                                   effort=effort, web=self.cfg["agents"]["web"], dirs=dirs)
+                                                   effort=effort, web=self.cfg["agents"]["web"], dirs=dirs,
+                                                   interactive=interactive)
+        if interactive and t["agent"] == "claude":
+            trust_folder(home, repo)
         env["AXON_ATTEMPT"] = str(n)
         # io (socket, MCP config) is read-only: connect() still works, replacing them does not.
         # ponytail: tasks of one project may write the same rw folder at once; serialize them if that bites.
         box = sandbox.bwrap(repo, rw=[repo, home, *dirs], ro=[*ro, str(io), *extra_ro], env=env)
         timed_out = False
-        with open(adir / "agent.log", "wb") as log:
-            p = subprocess.Popen(sandbox.scope(unit, lim["agent_memory"], box + argv),
-                                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
-            deadline = time.time() + lim["attempt_timeout"]
-            while p.poll() is None:
-                if time.time() > deadline and not timed_out:
-                    timed_out = True
-                    sandbox.stop_unit(unit)
-                time.sleep(0.1)
+        if interactive:
+            session = f"axon-chat-task{tid}"  # listed in the Chat tab: attach to talk to the agent
+            s.log(tid, aid, "interactive", session=session)
+            returncode, timed_out = self._in_tmux(tid, session, sandbox.scope(unit, lim["agent_memory"], box + argv), adir,
+                                                  state, lim["attempt_timeout"])
+        else:
+            with open(adir / "agent.log", "wb") as log:
+                p = subprocess.Popen(sandbox.scope(unit, lim["agent_memory"], box + argv),
+                                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                deadline = time.time() + lim["attempt_timeout"]
+                while p.poll() is None:
+                    if time.time() > deadline and not timed_out:
+                        timed_out = True
+                        sandbox.stop_unit(unit)
+                    time.sleep(0.1)
+            returncode = p.returncode
         sandbox.stop_unit(unit)
         srv.close()
         if not s.one("select 1 from attempts where id = ? and status = 'running'", aid):
-            s.log(tid, aid, "stale-result-dropped", returncode=p.returncode)  # recovered elsewhere
+            s.log(tid, aid, "stale-result-dropped", returncode=returncode)  # recovered elsewhere
             return
 
-        tail =(adir / "agent.log").read_bytes()[-4000:].decode(errors="replace")
+        tail = ANSI_RE.sub(" ", (adir / "agent.log").read_bytes()[-8000:].decode(errors="replace"))
         if s.one("select cancel from tasks where id = ?", tid)["cancel"]:
             outcome = "cancelled"
         elif self.stopping:
@@ -844,7 +880,7 @@ class Runtime:
             outcome = state["report"]["status"]
         elif state["asked"] is not None:
             outcome = "asked"
-        elif p.returncode == 0:
+        elif returncode == 0:
             outcome = "unreported"
         elif QUOTA_RE.search(tail):
             outcome = "quota"
@@ -881,6 +917,38 @@ class Runtime:
             raise RuntimeError(f"bundle failed: {r.stderr.strip()}")
         sandbox.fetch(proj["path"], out / "out.bundle", f"refs/axon/attempts/{aid}")
         return head
+
+    def _in_tmux(self, tid, name, cmd, adir, state, timeout):
+        """Run an interactive agent in a tmux session (same one the Chat tab attaches to). It ends when the agent
+        reports or asks (a TUI never exits by itself), exits, is stopped, or runs out of time.
+        Returns (1 if the log shows the usage limit else 0, timed_out): a TUI's exit code says nothing."""
+        tmux = lambda *a: subprocess.run(["tmux", *a], capture_output=True)
+        tmux("kill-session", "-t", f"={name}")  # a leftover of an earlier attempt of this task
+        (adir / "agent.log").touch()  # exists even if the session is gone before tmux writes to it
+        subprocess.run(["tmux", "new-session", "-d", "-x", "120", "-y", "40", "-s", name, "-c", str(adir / "repo"),
+                        shlex.join(cmd)], check=True)
+        for opt in (["status", "off"], ["mouse", "on"], ["window-size", "latest"]):
+            tmux("set-option", "-t", name, *opt)
+        tmux("pipe-pane", "-t", name, f"cat >> {shlex.quote(str(adir / 'agent.log'))}")  # quota text for QUOTA_RE
+        deadline, timed_out, ended, rc, log, checked = time.time() + timeout, False, None, 0, adir / "agent.log", 0.0
+        while tmux("has-session", "-t", f"={name}").returncode == 0:
+            if time.time() > deadline:
+                timed_out = True
+                break
+            if self.stopping or self.store.one("select cancel from tasks where id = ?", tid)["cancel"]:
+                break  # a Stop that came before the scope existed has nothing to kill
+            if time.time() > checked + 2:
+                checked = time.time()
+                if TUI_QUOTA_RE.search(ANSI_RE.sub(" ", log.read_bytes()[-8000:].decode(errors="replace"))):
+                    rc = 1  # the caller reads the log and files it as quota
+                    break
+            if (state["report"] or state["asked"] is not None) and ended is None:
+                ended = time.time()
+            if ended and time.time() > ended + 1:  # a second for the agent to finish its turn
+                break
+            time.sleep(0.1)
+        tmux("kill-session", "-t", f"={name}")
+        return rc, timed_out
 
     def _finish(self, t, aid, adir, outcome, state, head, proj, ro):
         s, tid, R = self.store, t["id"], ("RUNNING",)

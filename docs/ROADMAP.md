@@ -75,6 +75,10 @@ Exit: adapter จริงผ่าน acceptance scenarios ชุดเดี�
 เจอจาก probe: `codex exec` ต้อง pre-approve MCP tools; Claude ต้องใช้ `--tools` เพื่อ default-deny; Claude session หายถ้า kill ก่อนบันทึก (Runner ไม่พึ่ง session ของ provider)
 ยังไม่ผ่าน/ไม่ได้ทดสอบ: quota และ credential leak กับ CLI จริง (leak ไม่ได้ให้ agent จริงคัดลอก token จริงลง diff; ผ่านกับ fake-agent แล้ว), ข้อความ rate limit จริง (ไม่เผา quota เพื่อทดสอบ), local backend ใน matrix มีเฉพาะ summarize ไม่ใช่ coding
 
+### Interactive mode (2026-10-08)
+
+Claude ทำงานเป็น terminal session จริงแทน `claude -p` ตามค่าเริ่มต้น (`[agents] claude_mode`, ดู OD-019); `codex_mode` ยังเป็น `headless`
+
 ## Phase 2 — Two-agent collaboration and integration
 
 เพิ่ม proposal/critique/delegate/review, task dependencies และ bounded conversation rounds
