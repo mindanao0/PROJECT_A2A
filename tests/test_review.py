@@ -1,8 +1,8 @@
 """Read-only reviews bound to the exact result commit (Phase 2) with fake-agent as reviewer."""
 
-import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from navis import integrate, runtime
@@ -91,6 +91,7 @@ class Review(NavisTest):
         self.assertEqual((again, dup), (None, rid))
 
 
+@mock.patch.object(runtime, "_which", lambda name: Path(f"/opt/{name}/bin/{name}"))  # argv only: no CLI needed
 class Adapters(unittest.TestCase):
     def test_claude_review_has_read_only_tools(self):
         with tempfile.TemporaryDirectory() as io:
@@ -98,7 +99,6 @@ class Adapters(unittest.TestCase):
         self.assertEqual(argv[argv.index("--tools") + 1], "Read,Glob,Grep")
         self.assertNotIn("Edit", argv[argv.index("--allowedTools") + 1])
 
-    @unittest.skipUnless(shutil.which("codex"), "needs the codex CLI on PATH")
     def test_codex_review_uses_the_read_only_sandbox(self):
         argv, _, _ = runtime.codex_cmd("p", ["py", "mcp.py", "s"], Path("/h"), Path("/io"), readonly=True)
         self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")

@@ -141,6 +141,10 @@ Agent Runner ของ local model สร้างและทดสอบแล
 เพิ่ม Team/Debate, dynamic scheduling, capability matching, adversarial review, multi-project scheduling และ A2A bridge เมื่อมี use case ที่พิสูจน์แล้ว
 ค่อยขยาย UI/พิจารณา desktop wrapper; framework ยังไม่ล็อก
 
+### Phase 5 status — Debate (วัดก่อนสร้าง)
+
+ยังไม่สร้างระบบ Team/Debate: ทดลองวัดด้วยงานที่ต่อกันจากของเดิม (`probes/debate.py`) ผลสรุปอยู่ใน [Phase 5](PHASE5.md) — เห็นความต่างเฉพาะ spec ที่มีกฎตรวจ/ข้อผิดพลาดยาว (semver) ในราคา ~3× เวลาและ token และ 2 จาก 6 รอบค้างรออนุมัติ จึงเลื่อนไว้ A2A bridge, desktop wrapper และ adversarial review ไม่ทำ (ยังไม่มี use case)
+
 ## Phase 6 — Remote control
 
 เป็นงานในอนาคต ไม่อยู่ใน MVP
