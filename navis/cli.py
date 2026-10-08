@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import agent_options, helper, integrate, retention, runtime, sandbox, usage
+from . import agent_options, helper, integrate, retention, routing, runtime, sandbox, usage
 
 DONE = ("COMPLETED", "FAILED", "CANCELLED")
 NEEDS_YOU = {"WAITING_INPUT": "answer it: navis answer {id}", "WAITING_APPROVAL": "approve it: navis approve {id}",
@@ -277,7 +277,8 @@ def main(argv=None):
     i.add_argument("name", nargs="?", help="default: the folder name")
     a = sub.add_parser("add", help="queue a task: navis add \"fix the login bug\"")
     a.add_argument("-p", "--project", help="default: the project of the current folder")
-    a.add_argument("-a", "--agent", default="claude", choices=sorted(runtime.ADAPTERS), help="default: claude")
+    a.add_argument("-a", "--agent", default="claude", choices=["auto", *sorted(runtime.ADAPTERS)],
+                   help="default: claude; auto = the first agent in the routing pool that can start it now (see navis routing)")
     a.add_argument("-s", "--scope", action="append", default=[], help="path prefix the task may edit (repeatable; default: everything)")
     a.add_argument("--base", default="HEAD", help="commit to start from")
     a.add_argument("--after", type=int, help="start only after this task is COMPLETED, from its result")
@@ -317,6 +318,8 @@ def main(argv=None):
     ao.add_argument("agent", nargs="?", choices=agent_options.AGENTS)
     ao.add_argument("--model")
     ao.add_argument("--effort")
+    rt_ = sub.add_parser("routing", help="show or set which agent tasks created with -a auto try first")
+    rt_.add_argument("--first", choices=["claude", "codex"])
     sub.add_parser("integration", help="show a project's integration branch").add_argument("project", nargs="?")
     sub.add_parser("promote", help="fast-forward your checked-out branch to the integration branch").add_argument("project", nargs="?")
     an = sub.add_parser("answer", help="answer the agent's question")
@@ -430,6 +433,10 @@ def main(argv=None):
             print(f"discarded integration branch at {integrate.discard(store, args.project)[:10]}")
         except integrate.IntegrationError as e:
             sys.exit(str(e))
+    elif args.cmd == "routing":
+        if args.first:
+            routing.save_first(runtime.config_dir() / "config.toml", args.first)
+        print("auto tries, in order: " + " -> ".join(routing.pool(runtime.load_config())))
     elif args.cmd == "agent-options":
         if args.agent and (args.model is not None or args.effort is not None):
             cur = runtime.load_config()["agents"]

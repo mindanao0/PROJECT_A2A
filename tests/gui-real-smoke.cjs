@@ -56,6 +56,22 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     assert.notEqual(git('rev-parse', 'HEAD').trim(), before);
     assert.equal(git('show', 'HEAD:src/x.py'), 'x = 1\n');
     assert.equal(git('status', '--porcelain').trim(), '');
+    // Auto routing: choose the first agent in Settings, create an "Auto" task; nobody is logged in here, so it waits and says why.
+    await page.locator('.sidebar [data-view="settings"]').click();
+    await page.locator('#routing-form [name="first"]').selectOption('codex');
+    await page.getByRole('button', {name: 'Save routing', exact: true}).click();
+    await page.locator('#toast', {hasText: 'codex then claude'}).waitFor();
+    assert(/pool = \["codex", "claude"\]/.test(fs.readFileSync(path.join(root, 'cfg', 'config.toml'), 'utf8')), 'pool saved');
+    await page.getByRole('button', {name: '+ New task', exact: true}).click();
+    assert((await page.locator('#task-agent option[value="auto"]').innerText()).includes('codex → claude'), 'Auto lists the pool order');
+    await page.locator('#task-agent').selectOption('auto');
+    assert.equal(await page.locator('#task-model-row').isVisible(), false, 'model/effort belong to a named agent');
+    await page.getByLabel('Title (optional)', {exact: true}).fill('Routed task');
+    await page.getByLabel('What should the agent do?', {exact: true}).fill('Do something small.');
+    await page.getByRole('button', {name: 'Create task →', exact: true}).click();
+    await page.locator('#task-detail').getByText('auto → auto').waitFor();
+    await page.locator('#task-detail').getByText('No agent can start this yet').waitFor();
+    await page.locator('#detail-dialog').getByRole('button', {name: 'Close task details', exact: true}).click();
     // A dependent task verified by one check, created from the form; the usage view lists the finished attempts.
     await page.getByRole('button', {name: '+ New task', exact: true}).click();
     await page.getByLabel('Title (optional)', {exact: true}).fill('Add y after x');

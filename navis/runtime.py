@@ -20,7 +20,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from . import agent_options, sandbox, usage
+from . import agent_options, routing, sandbox, usage
 from .store import Store
 
 # ponytail: generic pattern; replace with each CLI's real rate-limit text after the Phase 1b probes.
@@ -34,6 +34,7 @@ DEFAULTS = {
                "review_rounds": 2, "max_delegations": 3, "fairness_hours": 6, "retention_days": 30},
     # model/effort "" = the CLI's default; web: agents may search and read web pages (their commands and checks stay offline)
     "agents": {"claude_model": "", "claude_effort": "", "codex_model": "", "codex_effort": "", "web": True},
+    "routing": {"pool": ["claude", "codex"]},  # preference order for tasks created with agent "auto"
     "helper": {"url": "http://127.0.0.1:11434", "model": "qwen2.5-coder:7b", "timeout": 120},
     "server": {"port": 8765, "hosts": []},  # hosts: names a proxy on this machine serves the GUI under (navis remote)
     # Local coding is a role the user must switch on (D-004): off until the Agent Runner's tests are trusted.
@@ -111,7 +112,7 @@ def object_dirs(objects):
 
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$")
-LOGIN_FILE = {"codex": "auth.json", "claude": ".credentials.json"}
+LOGIN_FILE = routing.LOGIN_FILE
 
 
 def project_for(path):
@@ -245,8 +246,10 @@ ADAPTERS = {"fake": fake_cmd, "codex": codex_cmd, "claude": claude_cmd, "local":
 def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", source=None, kind="", target=None,
              after=None, parent=None, round=0, checks=None, model=None, effort=None):
     """Queue a task. Returns (task id, None), or (None, id of the live duplicate)."""
-    if agent not in ADAPTERS:
-        raise ValueError(f"unknown agent {agent!r}; choose from {', '.join(ADAPTERS)}")
+    if agent not in ADAPTERS and agent != "auto":
+        raise ValueError(f"unknown agent {agent!r}; choose from auto, {', '.join(ADAPTERS)}")
+    if agent == "auto" and (model or effort):
+        raise ValueError("model and effort belong to a specific agent; set them in Settings or choose the agent")
     if agent == "local" and not load_config()["local"]["coding"]:
         raise ValueError("local coding is off; set coding = true under [local] in config.toml to allow it")
     proj = load_project(project)
@@ -268,11 +271,12 @@ def add_task(store, project, agent, spec, scope=(), base="HEAD", title="", sourc
             + (f"+model{model}" if model else "") + (f"+effort{effort}" if effort else ""))
     key, now = task_key(project, spec, scope, sha + salt), time.time()
     try:
-        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks, model, effort)"
-                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?,?)",
+        _, tid = store.x("insert into tasks(project, agent, spec, title, source, scope, key, base, status, created, updated, kind, target, after, parent, round, checks, model, effort, routing)"
+                         " values (?,?,?,?,?,?,?,?,'QUEUED',?,?,?,?,?,?,?,?,?,?,?)",
                          project, agent, spec, title or spec.strip().splitlines()[0][:80],
                          json.dumps(source) if source else "", json.dumps(scope), key, sha, now, now, kind, target,
-                         after, parent, round, json.dumps(checks) if checks else None, model, effort)
+                         after, parent, round, json.dumps(checks) if checks else None, model, effort,
+                         "auto" if agent == "auto" else None)
     except sqlite3.IntegrityError:
         dup = store.one("select id from tasks where key = ? and status not in ('FAILED', 'CANCELLED')", key)
         return None, dup["id"]
@@ -641,7 +645,16 @@ class Runtime:
             " where a.started >= ? group by t.project", now, now - self.cfg["limits"]["fairness_hours"] * 3600)}
         cands = list(s.q("select * from tasks where status in ('QUEUED', 'WAITING_QUOTA') order by id"))
 
+        routed = {}  # task id -> (agent, skipped): where an "auto" task goes if it is dispatched now
+
         def runnable(t):
+            if t["agent"] == "auto":
+                target = s.one("select agent from tasks where id = ?", t["target"]) if t["kind"] == "review" else None
+                choice, skipped = routing.choose(t, self.cfg, running, cooling, now, data_dir(), target["agent"] if target else None)
+                if not choice:
+                    return False
+                routed[t["id"]] = (choice, skipped)
+                t = {**dict(t), "agent": choice}
             if cooling.get(t["agent"], 0) > now:
                 return False
             if sum(r["agent"] == t["agent"] for r in running) >= self.cfg["slots"].get(t["agent"], 1):
@@ -661,6 +674,11 @@ class Runtime:
             if t is None:
                 break
             cands.remove(t)
+            if t["id"] in routed:
+                choice, skipped = routed[t["id"]]
+                s.x("update tasks set agent = ? where id = ? and agent = 'auto'", choice, t["id"])
+                s.log(t["id"], None, "routed", agent=choice, skipped=skipped)
+                t = {**dict(t), "agent": choice}
             if s.move(t["id"], "RUNNING", ("QUEUED", "WAITING_QUOTA")):
                 if t["after"] is not None and not t["head"]:  # start from the dependency's result
                     s.x("update tasks set base = (select head from tasks where id = ?) where id = ?", t["after"], t["id"])
@@ -894,6 +912,11 @@ class Runtime:
                    context_add=f"Q: {state['asked']}\n")
         elif outcome == "unreported":
             s.move(tid, "REVIEW", R, head=head, note="agent exited without report_result")
+        elif outcome == "quota" and t["routing"] == "auto":
+            until = self._cooldown(t["agent"])  # not waiting: another agent may take it right away
+            s.x("update tasks set agent = 'auto' where id = ?", tid)
+            s.move(tid, "QUEUED", R, head=head,
+                   note=f"{t['agent']} hit its quota (cooling until {time.strftime('%H:%M:%S', time.localtime(until))}); routing to another agent")
         elif outcome == "quota":
             until = self._cooldown(t["agent"])
             s.move(tid, "WAITING_QUOTA", R, head=head,

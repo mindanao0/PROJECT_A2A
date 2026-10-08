@@ -482,6 +482,26 @@ class Runtime(BridgeTest):
             self.create(DONE, agent="claude", effort="ultra")
         self.cmd(tid, "stop")
 
+    def test_auto_tasks_explain_the_wait_and_the_routing_preference_is_saved(self):
+        self.assertEqual(self.b.snapshot()["routing"], {"pool": ["claude", "codex"]})
+        tid = self.create(DONE, agent="auto")
+        t = self.task(self.b.snapshot(), tid)
+        self.assertEqual((t["backend"], t["routing"]), ("auto", "auto"))
+        reasons = [r["message"] for r in t["queue_reasons"] if r["code"] == "routing"]
+        self.assertEqual(reasons, ["No agent can start this yet: claude not logged in; codex not logged in"])
+        self.login("codex")
+        reasons = [r["code"] for r in self.task(self.b.snapshot(), tid)["queue_reasons"]]
+        self.assertNotIn("routing", reasons)  # codex can take it now
+        out = self.b.command({"action": "set_routing", "first": "codex"})
+        self.assertIn("codex then claude", out["message"])
+        self.assertEqual(self.b.snapshot()["routing"], {"pool": ["codex", "claude"]})
+        self.assertEqual(runtime.load_config()["routing"]["pool"], ["codex", "claude"])  # persisted
+        with self.assertRaisesRegex(ControlError, "claude or codex"):
+            self.b.command({"action": "set_routing", "first": "fake"})
+        with self.assertRaisesRegex(ControlError, "belong to a specific agent"):
+            self.create(DONE, agent="auto", effort="low")
+        self.cmd(tid, "stop")
+
     def test_the_gui_can_pick_checks_and_sees_usage_and_per_attempt_cost(self):
         self.project({"a": "test -f src/a/a.py", "b": "true"})
         (proj,) = self.b.snapshot()["projects"]
