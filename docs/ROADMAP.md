@@ -12,7 +12,7 @@ Exit: sandbox, cgroup และ git isolation ใช้งานได้บน�
 ## สถานะรวม (2026-10-08)
 
 - **merge แล้ว:** Phase 0–3 (Phase 1b ทดสอบเฉพาะบางส่วน ดูด้านล่าง), Phase 4 ที่สร้างแล้วแต่ปิดไว้, Phase 5 ที่วัดแล้ว, การเปลี่ยนชื่อเป็น Axon (PR #26)
-- **ค้างตาม roadmap:** Phase 1b ยังไม่ทดสอบ quota จริง, ข้อความ rate limit จริง และ credential leak กับ CLI จริง; OD ที่ยังเปิดอยู่คือนโยบายของ provider (OD-019) และงาน enforcement ที่ค้างใน OD-013/015/023 (ดู [Open Decisions](OPEN_DECISIONS.md)); การวัด overhead บน VELA (OD-007); Context Broker ยังไม่สร้างจนกว่าจะมีงานจริงที่ prompt ใหญ่ (OD-009)
+- **ค้างตาม roadmap:** Phase 1b ยังไม่ทดสอบ quota จริง, ข้อความ rate limit จริง และ credential leak กับ CLI จริง; OD-019 (นโยบาย provider) ปิดแล้วโดยเหลือข้อเทาของ `claude -p`; งาน enforcement ที่ค้างใน OD-013/015/023 (ดู [Open Decisions](OPEN_DECISIONS.md)); การวัด overhead บน VELA (OD-007); Context Broker ยังไม่สร้างจนกว่าจะมีงานจริงที่ prompt ใหญ่ (OD-009)
 - **Local coding ปิดเป็นค่าเริ่มต้น** และยังไม่มีโมเดลที่ผ่านงานทดสอบ
 
 ## GUI foundation ที่มีแล้ว (ยังไม่ปิด Phase 1)
@@ -74,6 +74,10 @@ Exit: adapter จริงผ่าน acceptance scenarios ชุดเดี�
 ผ่าน: single-agent coding กับ Codex และ Claude จริงผ่าน Runner (`python3 probes/adapter.py codex|claude`), tool list ของ Claude ไม่มี Bash, resume ของ Codex หลัง kill -9, boundary escape กับทั้งสอง (`probes/adapter.py codex|claude escape`: อ่าน secret/state/checkout ไม่ได้, เน็ตของคำสั่งปิด, ไม่มีไฟล์เกิดบน host, canary ไม่รั่ว), Stop และ runner-crash recovery กลางงานกับทั้งสอง (`probes/adapter.py codex|claude stop|recover`: process tree หายหมดรวม orphan `setsid`, scope inactive, late result ถูกปฏิเสธ)
 เจอจาก probe: `codex exec` ต้อง pre-approve MCP tools; Claude ต้องใช้ `--tools` เพื่อ default-deny; Claude session หายถ้า kill ก่อนบันทึก (Runner ไม่พึ่ง session ของ provider)
 ยังไม่ผ่าน/ไม่ได้ทดสอบ: quota และ credential leak กับ CLI จริง (leak ไม่ได้ให้ agent จริงคัดลอก token จริงลง diff; ผ่านกับ fake-agent แล้ว), ข้อความ rate limit จริง (ไม่เผา quota เพื่อทดสอบ), local backend ใน matrix มีเฉพาะ summarize ไม่ใช่ coding
+
+### Interactive mode (2026-10-08)
+
+Claude ทำงานเป็น terminal session จริงแทน `claude -p` ตามค่าเริ่มต้น (`[agents] claude_mode`, ดู OD-019); `codex_mode` ยังเป็น `headless`
 
 ## Phase 2 — Two-agent collaboration and integration
 

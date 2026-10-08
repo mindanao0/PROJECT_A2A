@@ -5,14 +5,11 @@ instead of being guessed. A context fingerprint is not a provider cache hit, so 
 cached-token counts are reported as cache use."""
 
 import json
-import time
-import urllib.request
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
 TAIL = 400_000  # ponytail: only the log's tail is read, so a very long Codex run undercounts early turns
-CLAUDE_USAGE = "https://api.anthropic.com/api/oauth/usage"  # what Claude Code's /usage reads; not a published API
 WINDOWS = {300: "5h", 10080: "week"}
 
 
@@ -98,23 +95,16 @@ def codex_limits(home):
     return None
 
 
-def claude_limits(home, cache):
-    """{windows, as_of} from the endpoint Claude Code's /usage reads, while Claude's own login token is valid (Claude
-    renews it whenever it starts; Axon never rewrites the login). Otherwise the last answer, kept in `cache`."""
-    try:
-        o = json.loads(Path(home, ".credentials.json").read_text())["claudeAiOauth"]
-        if o["expiresAt"] / 1000 > time.time() + 60:
-            req = urllib.request.Request(CLAUDE_USAGE, headers={"Authorization": "Bearer " + o["accessToken"],
-                                                                "anthropic-beta": "oauth-2025-04-20", "User-Agent": "axon"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                d = json.load(r)
-            out = {"windows": [window(m, d[k]["utilization"], ts(d[k].get("resets_at")))
-                               for k, m in (("five_hour", 300), ("seven_day", 10080)) if d.get(k)], "as_of": time.time()}
-            Path(cache).write_text(json.dumps(out))
-            return out
-    except (OSError, ValueError, KeyError, TypeError):
-        pass  # no login, an expired token, offline, or the endpoint changed: fall back to the last answer
-    try:
-        return json.loads(Path(cache).read_text())
-    except (OSError, ValueError):
-        return None
+def claude_limits(text, now):
+    """{windows, as_of} from the last rate_limit_event in a claude stream-json log (utilization is a fraction there);
+    the CLI reports it itself on every run, so Axon never touches Claude's login."""
+    for line in reversed(text.splitlines()):
+        if '"unifiedWindows"' not in line:
+            continue
+        try:
+            w = json.loads(line)["rate_limit_info"]["unifiedWindows"]
+            return {"windows": [window(m, w[k]["utilization"] * 100, w[k]["resetsAt"])
+                                for k, m in (("five_hour", 300), ("seven_day", 10080)) if w.get(k)], "as_of": now}
+        except (ValueError, KeyError, TypeError):
+            continue
+    return None

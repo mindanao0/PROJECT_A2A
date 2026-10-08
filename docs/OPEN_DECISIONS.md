@@ -2,7 +2,7 @@
 
 เอกสารนี้เก็บสิ่งที่ **ยังไม่ได้ตัดสินใจ** และสถานะคำตัดสินที่เกี่ยวข้อง รายการที่ยืนยันแล้วอ้าง [Confirmed Decisions](DECISIONS.md); ข้อเสนอ acceptance อยู่ใน [MVP Contract](MVP_CONTRACT.md)
 
-สถานะ (2026-10-08): ยังเปิดอยู่ OD-019 (รออ่านเงื่อนไขของ provider จากต้นฉบับ); นโยบายตัดสินแล้วแต่ enforcement ยังค้าง: OD-013 และช่องว่างที่รู้แล้วใน OD-023 และ OD-015 ข้ออื่นตัดสินแล้ว (D-015–D-032) บางข้อเป็นคำตัดสินว่า "ยังไม่สร้าง" พร้อมเงื่อนไขที่จะกลับมาดูใหม่
+สถานะ (2026-10-08): ไม่มี OD ที่เปิดอยู่ (OD-019 ปิดแล้ว เหลือข้อเทาของ `claude -p`); นโยบายตัดสินแล้วแต่ enforcement ยังค้าง: OD-013 และช่องว่างที่รู้แล้วใน OD-023 และ OD-015 ข้ออื่นตัดสินแล้ว (D-015–D-032) บางข้อเป็นคำตัดสินว่า "ยังไม่สร้าง" พร้อมเงื่อนไขที่จะกลับมาดูใหม่
 
 ## OD-001 Core implementation language — RESOLVED
 
@@ -156,17 +156,25 @@ D-032: ไม่สร้างระบบ Team/Debate; ใช้วงจร i
 
 D-002: Linux first ยืนยันแล้ว ระบบอื่นเป็นงานภายหลังและยังไม่อยู่ในเกณฑ์ผ่าน MVP
 
-## OD-019 Provider policy compatibility — OPEN (ฝั่งเทคนิคตรวจแล้ว / ยังไม่ได้อ่านเงื่อนไขจากต้นฉบับ)
+## OD-019 Provider policy compatibility — RESOLVED (อ่านเงื่อนไขแล้ว 2026-10-08 / เหลือข้อเทา 1 ข้อ)
 
-ก่อน automate CLI ใด ต้องตรวจ official usage/policy/terms ของ provider และออกแบบ adapter ให้ใช้ช่องทางที่รองรับ ไม่ทำ browser scraping หรือ credential circumvention
+หลักการ: ใช้ binary ทางการ (`codex`, `claude`) ด้วย login ของผู้ใช้เองบนเครื่องของผู้ใช้เอง ไม่ทำ browser scraping หรือ credential circumvention (D-018)
 
-ฝั่งเทคนิค (ตรวจกับโค้ด 2026-10-08):
-- ใช้ binary ทางการ (`codex`, `claude`) ด้วย login ของผู้ใช้บนเครื่องของผู้ใช้ ผ่านโหมด noninteractive ที่ CLI มีให้ (D-018)
-- ไม่ scrape เว็บและไม่นำ token ไปใช้นอก CLI: credential อยู่ใน agent home (`~/.local/share/axon/agents/<agent>/`) และ Runtime อ่านเพื่อ redact และสแกน diff เท่านั้น
-- ใช้ quota ตามสิทธิ์: 1 session ต่อ provider (D-009) และ rate limit เป็น WAITING_QUOTA พร้อม backoff
+**Anthropic** ([Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) มีผล 2025-10-08)
+- OAuth ของแผน Free/Pro/Max ออกแบบเพื่อการใช้งานปกติของ Claude Code; ห้ามนักพัฒนา route request ผ่าน credential ของแผน subscription แทนผู้ใช้ และห้ามเก็บ/ส่งต่อ credential หรือ session token ของ Claude.ai; ผู้ใช้ล็อกอินใน binary ที่ไม่ได้ดัดแปลงด้วยบัญชีตัวเองได้
+- ขีดจำกัดของ Pro/Max "ตั้งอยู่บนการใช้งานแบบปกติของแต่ละบุคคล"
+- Consumer Terms ข้อ 3.7 ห้ามเข้าถึงด้วย "automated or non-human means ... bot, script" ยกเว้นผ่าน API key หรือที่ Anthropic อนุญาตชัดเจน; ข้อ 2 ห้ามแชร์ credential/account
 
-ยังต้องทำ: อ่านเงื่อนไขฉบับปัจจุบันจากต้นทางโดยตรง (Anthropic Consumer Terms/Usage Policy สำหรับ Claude Pro/Max + Claude Code; OpenAI Terms of Use + Help Center "Using Codex with your ChatGPT plan") แล้วบันทึกวันที่และเวอร์ชันไว้ที่นี่
-ข้อสังเกตจากการค้นเบื้องต้น (2026-10-08, แหล่งรอง ยังไม่ยืนยัน): เอกสารนักพัฒนาของ OpenAI แนะนำ API key สำหรับงานอัตโนมัติแบบ CI; มีรายงานว่า Anthropic ห้ามใช้ OAuth token ของแผน subscription นอกเครื่องมือทางการ (Axon เรียก Claude Code เอง แต่ต้องยืนยันว่าการเรียกแบบนี้เข้าข่ายหรือไม่); แผนแยกโควตาของ `claude -p` ออกจาก subscription ถูกพักไว้
+**OpenAI** ([Codex auth](https://learn.chatgpt.com/docs/auth), [CI/CD auth](https://learn.chatgpt.com/docs/auth/ci-cd-auth))
+- ล็อกอินด้วย ChatGPT หรือ API key ได้ทั้งคู่; API key เป็นค่าที่แนะนำสำหรับ automation/CI
+- ChatGPT auth ใน automation ใช้ได้เฉพาะ "trusted private infrastructure": ห้ามกับ repo สาธารณะ, ห้ามแชร์ `auth.json` ข้าม job พร้อมกันหรือหลายเครื่อง
+- Terms of Use และ Help Center ของ OpenAI อ่านจากต้นฉบับไม่ได้ (HTTP 403) ที่ได้เป็นแหล่งรอง: ห้าม extract data แบบ automated, ห้ามแชร์ credential, ห้าม circumvent rate limit — ควรอ่านที่ openai.com/terms อีกรอบ
+
+**Axon เทียบกับเงื่อนไข (ตรวจกับโค้ด 2026-10-08; ไม่ใช่คำวินิจฉัยทางกฎหมาย)**
+- สอดคล้อง: เรียก binary ทางการด้วย login ของผู้ใช้เอง (login ทำผ่าน `claude auth login` / `codex login` ใน agent home แยก), ไม่ scrape เว็บ, 1 slot ต่อ provider (D-009), rate limit เป็น WAITING_QUOTA พร้อม backoff, ใช้คนเดียวบนเครื่องส่วนตัว
+- **แก้แล้ว:** เดิม `usage.claude_limits` อ่าน OAuth token จาก `.credentials.json` แล้วยิง `api.anthropic.com/api/oauth/usage` (endpoint ไม่เปิดเผย) เอง ซึ่งเข้าข่าย "collect/intermediate credentials" ตอนนี้ลบแล้ว: แถบ quota ของ Claude อ่านจาก `rate_limit_event.unifiedWindows` ที่ `claude` ส่งใน stream ของตัวเอง (Runner เขียนลง `claude-limits.json` หลังแต่ละ attempt; ตรวจกับ CLI จริง 2026-10-08) Axon ไม่แตะ token ของ Claude อีก ฝั่ง Codex อ่านไฟล์ session ในเครื่องที่ Codex เขียนเองอยู่แล้ว
+- **เคยเทา → ลดแล้ว:** `claude -p` (non-interactive) ด้วย subscription: ข้อ 3.7 ห้าม "script" แต่ docs ของ Claude Code ไม่ได้ห้ามเรียก binary ทางการแบบ headless สองข้อไม่ตรงกันและโค้ดแก้คำตัดสินไม่ได้ จึงเปลี่ยนค่าเริ่มต้นของ Claude เป็น **interactive** (`[agents] claude_mode = "interactive"`): task เปิด `claude "<prompt>"` เป็น terminal จริงใน tmux session `axon-chat-task<id>` (sandbox/cgroup เดิม; เปิดดู/คุยต่อได้ในแท็บ Chat) งานจบเมื่อ agent เรียก `report_result`/`ask_user`, ผู้ใช้ปิด session, Stop หรือหมดเวลา Axon ไม่ฉีด keystroke; ตอบ trust-folder ใน config ของ Claude เอง (`trust_folder`) ตรวจกับ `claude` จริง 2026-10-08 (`probes/adapter.py claude`: COMPLETED 6 s) แถบ quota ของ Claude มาจาก status line ที่ Claude Code รองรับเอง (`--settings statusLine` → `axon/statusline.py` เขียน `axon-limits.json` ใน agent home; ตรวจกับ `claude` จริงแล้ว) ข้อแลก: ไม่มี stream-json จึงไม่มี usage ต่อ attempt, ตรวจ quota จากข้อความใน terminal (`TUI_QUOTA_RE`, ยังไม่เคยเห็นข้อความจริง), agent ที่รอคุณ (ขออนุญาตหรือถามเป็นข้อความธรรมดา) ไม่มีสัญญาณเอง: Runner ตั้งโน้ตของงานเป็น `waiting for you: open Chat, task<id>` เมื่อ terminal เงียบเกิน `IDLE_SECONDS` (90) และล้างเมื่อขยับอีก `claude_mode = "headless"` ยังใช้ได้ถ้าต้องการออโตเมชันเต็มหรือใช้ API key (ยังไม่ทำ: ส่ง `ANTHROPIC_API_KEY` เข้า env ของ `claude_cmd`) Codex ยังเป็น headless (OpenAI อนุญาต `codex exec` บนเครื่องส่วนตัวที่เชื่อถือได้); interactive ของ Codex รอดูว่าของ Claude ใช้ได้ดี
+- **ห้ามเด็ดขาด:** ให้คนอื่นใช้ Axon ผ่าน subscription ของเรา หรือเปิดเป็น service (ทั้งสองฝั่งห้ามแชร์ account) — ถ้าจะทำต้องเปลี่ยนเป็น API key (ผูกกับ Phase 6 / OD-015)
 
 ## OD-020 Initial backend surface — RESOLVED
 
