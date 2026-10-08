@@ -27,6 +27,9 @@ from .store import Store
 REVIEW_DIFF = 60_000
 QUOTA_RE = re.compile(r"rate.?limit|usage.?limit|quota", re.I)
 STOPPABLE = ("QUEUED", "WAITING_INPUT", "WAITING_APPROVAL", "WAITING_QUOTA", "REVIEW")
+# What an agent CLI loads as its own settings from the repository: hooks and helpers there run commands with the
+# CLI's network, outside run_check. Always protected, and never loaded unseen by a later attempt (OD-013).
+AGENT_CONFIG = (".claude", ".codex", ".mcp.json")
 DEFAULTS = {
     "slots": {"codex": 1, "claude": 1, "fake": 2, "local": 1, "checks": 1},
     "limits": {"agent_memory": "3G", "chat_memory": "6G", "check_memory": "4G", "attempt_timeout": 3600,
@@ -70,7 +73,7 @@ def load_project(name):
     common = subprocess.run(["git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir"],
                             capture_output=True, text=True, check=True).stdout.strip()
     return {"path": path, "objects": object_dirs(f"{common}/objects"),
-            "protected": [x.strip("/") for x in p.get("protected", [])],
+            "protected": list(dict.fromkeys([*AGENT_CONFIG, *(x.strip("/") for x in p.get("protected", []))])),
             "checks": p.get("checks", {}), "prepare": p.get("prepare", {}),
             "require_review": bool(p.get("require_review", False)), "auto_apply": bool(p.get("auto_apply", False)),
             "ro": [os.path.expanduser(x) for x in sb.get("ro", [])],
@@ -175,6 +178,11 @@ def under(path, prefix):
 
 def overlaps(a, b):
     return any(under(x, y) or under(y, x) for x in a for y in b)
+
+
+def agent_config_changes(project, a, b):
+    """Files under AGENT_CONFIG that differ between two commits."""
+    return [f for f in sandbox.changed_files(project, a, b) if any(under(f, c) for c in AGENT_CONFIG)]
 
 
 def task_key(project, spec, scope, base=""):
@@ -775,9 +783,15 @@ class Runtime:
         sandbox.clone(proj["path"], repo, base, f"axon/{tid}/{n}")
         ro = [*proj["objects"], *proj["ro"]]
 
+        if not t["approved"] and base != t["base"]:  # continuing an earlier attempt: did it change what runs unseen?
+            why = []
+            if planted := agent_config_changes(proj["path"], t["base"], base):
+                why.append(f"agent settings changed ({', '.join(planted)})")
+            if proj["prepare"] and sandbox.inputs_changed(proj["path"], t["base"], base, proj["prepare_inputs"]):
+                why.append("dependency files changed (prepare runs with network)")
+            if why:
+                return self._finish(t, aid, adir, "needs-approval", {"why": "; ".join(why)}, base, proj, ro)
         if proj["prepare"]:
-            if not t["approved"] and sandbox.inputs_changed(proj["path"], t["base"], base, proj["prepare_inputs"]):
-                return self._finish(t, aid, adir, "needs-approval", {}, base, proj, ro)
             for name, cmd in proj["prepare"].items():
                 rc, tail = self._sandboxed(f"{unit}-prepare", repo, ro, proj["prepare_rw"], cmd, True,
                                            lim["check_memory"], lim["check_timeout"])
@@ -890,8 +904,7 @@ class Runtime:
         elif outcome == "interrupted":
             s.move(tid, "QUEUED", R, head=head, note="runner stopped; will resume")
         elif outcome == "needs-approval":
-            s.move(tid, "WAITING_APPROVAL", R,
-                   note="dependency files changed; approve to run prepare with network")
+            s.move(tid, "WAITING_APPROVAL", R, note=f"{state['why']}; look at the diff, then approve to continue"[:500])
         elif outcome == "prepare-failed":
             s.move(tid, "FAILED", R, note="prepare failed")
         elif outcome == "timeout":

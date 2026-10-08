@@ -33,7 +33,7 @@
 | D-020 | Project config เป็น TOML นอก repo ทั้งหมด | ไม่มีส่วนไหน commit ลง repo ของ project (OD-010) |
 | D-021 | Usage accounting ต่อ attempt: prompt bytes, เวลา, model/effort และ usage เท่าที่ CLI เปิดเผย | ค่าที่ไม่เปิดเผยเป็น `None`; fair scheduling ใช้ wall time (OD-012) |
 | D-022 | Sandbox: bwrap + systemd user scope ต่อ attempt | คำสั่งของ agent และ checks ไม่มีเน็ต; Chat เป็นข้อยกเว้นที่ผู้ใช้คุมเอง (OD-021) |
-| D-023 | Trust precedence: Runtime policy > ผู้ใช้ > repo instruction > agent message > web/tool content และ artifact | label ใน prompt ไม่ใช่ enforcement; งาน enforcement ที่ค้างอยู่ใน OD-013 |
+| D-023 | Trust precedence: Runtime policy > ผู้ใช้ > repo instruction > agent message > web/tool content และ artifact | label ใน prompt ไม่ใช่ enforcement; settings ของ agent CLI ใน repo เป็น protected เสมอ; เปิดเว็บให้ agent ต่อโดยยอมรับความเสี่ยง; งานที่ค้างอยู่ใน OD-013 |
 | D-024 | Adapter/agent รันเป็น child process ใน sandbox ของ attempt | ไม่มีระบบ plugin จากภายนอก (OD-014) |
 | D-025 | Lifecycle/controls ตามที่ implement ใน Runtime | ช่องว่างกับ MVP Contract ที่รู้แล้วอยู่ใน OD-023 |
 | D-026 | Local backend คือ Ollama บน loopback, โมเดลเริ่มต้น `qwen2.5-coder:7b`; local coding คงปิด | ประเมินใหม่เมื่อมีโมเดล/ฮาร์ดแวร์ที่ดีกว่า (OD-022, Phase 4) |

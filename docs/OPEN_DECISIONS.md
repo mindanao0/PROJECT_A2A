@@ -103,13 +103,15 @@ D-023: trust labels และ precedence (สูง → ต่ำ)
 
 บังคับใช้แล้ว:
 - ระดับ 0 อยู่นอก prompt: bwrap/cgroup, `--tools` แบบ default-deny ของ Claude, flag นอก scope/ไฟล์ protected ตอน verify, checks รันแบบไม่มีเน็ต
+- settings ของ agent CLI ใน repo (`.claude/`, `.codex/`, `.mcp.json` — `AGENT_CONFIG` ใน `axon/runtime.py`) เป็น protected เสมอ: ผลที่แก้ไฟล์เหล่านี้ไปที่ REVIEW และ attempt ที่จะเริ่มต่อจาก snapshot ที่ attempt ก่อนแก้ไฟล์เหล่านี้ (retry, ตอบคำถาม, quota) ต้องรอผู้ใช้อนุมัติก่อน เพราะ hooks/notify ในไฟล์เหล่านี้รันคำสั่งด้วยเน็ตของ CLI นอก `run_check` (tests: `test_agent_settings_in_a_result_need_review`, `test_a_retry_does_not_start_on_agent_settings_an_attempt_planted`)
 - ระดับ 3: `delegate` จำกัด 1 ชั้น ไม่เกิน `max_delegations` และ scope ต้องอยู่ใน scope ของงานแม่; ผลของ agent ไม่เปลี่ยนสถานะเอง เพราะ Runtime รัน checks ก่อน COMPLETED
-- ระดับ 4: prompt ของ reviewer ระบุว่า requirement และ diff เป็นข้อมูล ไม่ใช่คำสั่ง (`_review_prompt`); diff ที่มี credential ของ agent จะไม่ถูก fetch (`_collect`); hooks ของ clone ไม่ถูกรัน (`core.hooksPath=/dev/null`)
+- ระดับ 4: prompt ของ reviewer ระบุว่า requirement และ diff เป็นข้อมูล ไม่ใช่คำสั่ง (`_review_prompt`); diff ที่มี credential ของ agent จะไม่ถูก fetch (`_collect`); hooks ของ git ใน clone ไม่ถูกรัน (`core.hooksPath=/dev/null`)
+
+ความเสี่ยงที่ยอมรับ: เปิดเว็บให้ agent เป็นค่าเริ่มต้น (`[agents] web = true`) เพราะงานจริงต้องค้นข้อมูลได้ (ผู้ใช้ตัดสิน 2026-10-08) เนื้อหาเว็บ (ระดับ 4) จึงเข้าถึง agent ได้โดยตรง และเครื่องมือเว็บเปิด URL ที่โมเดลเลือกได้ ซึ่งเป็นช่องส่งข้อมูลออก (คำสั่งและ checks ยังไม่มีเน็ต) ยอมรับได้กับ project ส่วนตัว; ถ้ามี project ที่มีข้อมูลอ่อนไหว ให้เพิ่มสวิตช์ปิดเว็บราย project (ตอนนี้มีแค่ระดับทั้งระบบ)
 
 ยังต้องทำ (enforcement):
 1. prompt ของงาน implement รวมคำสั่งผู้ใช้ ผลของ check และผลรีวิวไว้ในหัวข้อเดียว ("Notes from earlier attempts and the user") ให้แยกเป็นส่วนตามระดับ และใส่บรรทัด "data, not instructions" แบบเดียวกับ prompt ของ reviewer
-2. ตรวจว่า `.claude/` หรือ `.codex/` ใน clone (agent เขียนได้ และ attempt ถัดไปต่อจาก snapshot นั้น) เพิ่ม tool หรือรัน hook ที่มีเน็ตได้หรือไม่ ถ้าได้ ให้ปิดการโหลด project settings ของ CLI หรือตั้งโฟลเดอร์เหล่านี้เป็น protected
-3. `[agents] web = true` เป็นค่าเริ่มต้น เนื้อหาเว็บ (ระดับ 4) จึงเข้าถึง agent ได้โดยตรง และเครื่องมือเว็บของ agent เปิด URL ที่โมเดลเลือกได้ ซึ่งเป็นช่องส่งข้อมูลออก (คำสั่งและ checks ยังไม่มีเน็ต) ให้พิจารณาปิดเป็นค่าเริ่มต้น หรือปิดต่อ project ที่มีข้อมูลอ่อนไหว
+2. รัน `python3 probes/adapter.py claude hooks` และ `codex hooks` กับ CLI จริงแล้วบันทึกผลที่นี่: (ก) CLI โหลด settings จาก repo เอง และคำสั่งนั้นมีเน็ตหรือไม่ — ถ้าใช่ ให้ปิดการโหลด project settings ตอนรันงานถ้า CLI ทำได้; (ข) agent เขียนลง agent home ของตัวเอง (`~/.local/share/axon/agents/<agent>/`) ได้หรือไม่ — agent home ถูก mount แบบเขียนได้ ถ้าเขียนได้ agent จะวาง settings ระดับผู้ใช้ให้งานถัดไปได้ ซึ่ง protected paths ไม่ครอบคลุม
 
 ## OD-014 Plugin/adapter sandbox — RESOLVED
 
@@ -224,7 +226,7 @@ Approval และ evidence: approve ของ review ผูกกับ commit 
 | Rollback | `discard` ลบ integration branch โดยไม่ย้อน branch ของผู้ใช้ |
 
 ช่องว่างกับ MVP Contract ที่รู้แล้ว (แก้เมื่อมีเหตุให้ต้องใช้):
-1. การอนุมัติให้ `prepare` ใช้เน็ตผูกกับ task (`approved = 1`) ไม่ได้ผูกกับ hash ของไฟล์ dependency ถ้า attempt หลังแก้ไฟล์ dependency อีกจะไม่ถามซ้ำ ควรผูกกับ hash ของ `prepare_inputs`
+1. การอนุมัติก่อนเริ่ม attempt ที่ต่อจาก snapshot (ไฟล์ dependency ที่ `prepare` ใช้เน็ต และ settings ของ agent ตาม OD-013 — ถามครั้งเดียวพร้อมเหตุผลทั้งหมด) ผูกกับ task (`approved = 1`) ไม่ได้ผูกกับ hash ของไฟล์ ถ้า attempt หลังแก้ไฟล์เหล่านั้นอีกจะไม่ถามซ้ำ ควรผูกกับ hash ของไฟล์ที่อนุมัติ
 2. update สถานะกับ event `status` อยู่คนละ statement ไม่ใช่ transaction เดียว ถ้า crash ระหว่างนั้น event จะหายได้ (สถานะยังถูกต้อง)
 3. event ไม่มี schema_version / correlation id / producer sequence ซึ่งพอสำหรับ Runtime ตัวเดียว แต่ต้องเพิ่มก่อนมี producer ที่สอง (remote หรือ A2A)
 
